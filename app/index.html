@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>个人内容工作台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">CW</span>
+      <span>个人内容工作台</span>
+    </div>
+    <nav id="nav" class="nav" aria-label="主导航"></nav>
+    <div class="top-actions">
+      <span id="data-state" class="data-state">本地数据</span>
+      <button type="button" class="ghost-button" data-action="refresh">刷新</button>
+      <a class="ghost-button" href="/api/export">导出</a>
+    </div>
+  </header>
+
+  <main id="view" class="view"></main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

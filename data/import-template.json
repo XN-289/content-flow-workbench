@@ -1,0 +1,67 @@
+{
+  "version": 2,
+  "importedAt": "",
+  "sources": [
+    {
+      "id": "source-001",
+      "name": "",
+      "platform": "x | xiaohongshu | douyin | wechat | other",
+      "account": "",
+      "url": "",
+      "role": "benchmark | material | comment | insight | counter-example",
+      "checkFrequency": "daily | weekly | on-demand",
+      "collectionMethod": "manual | browser-assisted | public-page | official-api | platform-export | research-only",
+      "dataBoundary": "public | own-account-export | manual-copy | research-only",
+      "lastRunStatus": "never-run | ok | partial | failed",
+      "authorMedianEngagement": null,
+      "keepReason": "",
+      "tags": []
+    }
+  ],
+  "signals": [
+    {
+      "id": "signal-001",
+      "sourceId": "source-001",
+      "collectionRunId": "",
+      "platform": "x | xiaohongshu | douyin | wechat | other",
+      "author": "",
+      "url": "",
+      "publishedAt": "",
+      "capturedAt": "",
+      "engagement": null,
+      "authorMedianEngagement": null,
+      "relativeMultiple": null,
+      "seen": false,
+      "disposition": "inbox | discard | watch | dissect | material | topic | produce",
+      "note": ""
+    }
+  ],
+  "materials": [
+    {
+      "id": "material-001",
+      "sourceUrl": "",
+      "platform": "x | xiaohongshu | douyin | wechat | other",
+      "author": "",
+      "type": "opinion | case | data | quote | hot-comment | counter-example | lead",
+      "excerpt": "",
+      "whyValuable": "",
+      "possibleUse": "hook | evidence | case | title | audience-language",
+      "citationNote": "",
+      "topicIds": []
+    }
+  ],
+  "topics": [
+    {
+      "id": "topic-001",
+      "title": "",
+      "coreIdea": "",
+      "targetReader": "",
+      "sourceSignalIds": [],
+      "materialIds": [],
+      "format": "spoken-video",
+      "platforms": ["douyin", "xiaohongshu", "wechat"],
+      "minimalPublishableVersion": "",
+      "stage": "topic | outline | draft | production | review | ready-to-publish | published | reviewed"
+    }
+  ]
+}

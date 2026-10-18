@@ -1,0 +1,10 @@
+{
+  "name": "content-flow-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/server.mjs",
+    "collect": "node scripts/collect-all.mjs"
+  }
+}

@@ -1,0 +1,19 @@
+# Local content records and capture snapshots stay on this machine.
+data/workbench.json
+data/workbench.json.*.tmp
+data/*.local.json
+data/exports/
+data/raw/
+
+# Environment and runtime artifacts
+.env
+.env.*
+*.log
+node_modules/
+browser-profile/
+cache/
+tmp/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
