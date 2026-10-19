@@ -224,6 +224,26 @@ function displayDate(value) {
   return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+function signalStrength(signal) {
+  if (signal.relativeMultiple !== null && signal.relativeMultiple !== undefined) return Number(signal.relativeMultiple);
+  if (signal.engagement !== null && signal.engagement !== undefined) return Number(signal.engagement);
+  return -1;
+}
+
+function signalTime(signal) {
+  const published = new Date(signal.publishedAt || 0).getTime() || 0;
+  const captured = new Date(signal.capturedAt || 0).getTime() || 0;
+  return Math.max(published, captured);
+}
+
+function readNumberInput(input) {
+  const value = input.value.trim();
+  if (!value) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error("请输入有效的非负数字");
+  return parsed;
+}
+
 function topicDefaults(record = {}) {
   return {
     ...record,
@@ -396,7 +416,7 @@ function renderSources() {
                 ${tag(platformLabels[source.platform] || source.platform, "info")}
                 ${tag(methodLabels[source.collectionMethod] || source.collectionMethod || "未设置")}
                 ${tag(source.checkFrequency || "daily")}
-                ${source.authorMedianEngagement ? tag(`中位数 ${source.authorMedianEngagement}`) : ""}
+                ${source.authorMedianEngagement ? tag(`中位数 ${source.authorMedianEngagement} · 样本 ${source.engagementSampleCount || 0}`) : ""}
               </div>
               ${source.keepReason ? `<p class="item-note">${escapeHtml(source.keepReason)}</p>` : ""}
               <div class="item-actions">
@@ -421,6 +441,11 @@ function renderInbox() {
     return signal.disposition === inboxFilter;
   });
   const filters = [["inbox", "待处理"], ["unseen", "未看"], ["watch", "观察"], ["dissect", "拆解"], ["discard", "丢弃"]];
+  const visibleSignals = [...filtered].sort((a, b) => (
+    signalStrength(b) - signalStrength(a)
+    || signalTime(b) - signalTime(a)
+    || String(a.title || "").localeCompare(String(b.title || ""), "zh-CN")
+  ));
 
   return `
     <section class="page-head">
@@ -431,8 +456,11 @@ function renderInbox() {
     </section>
     <div class="filter-row">${filters.map(([value, label]) => `<button type="button" class="small-button ${inboxFilter === value ? "accent" : ""}" data-action="filter-inbox" data-value="${value}">${label}</button>`).join("")}</div>
     <div class="list">
-      ${filtered.length ? filtered.map((signal) => {
+      ${visibleSignals.length ? visibleSignals.map((signal) => {
         const source = sourceById(signal.sourceId);
+        const medianIsAuto = Number(source?.engagementSampleCount || 0) >= 3;
+        const median = signal.authorMedianEngagement;
+        const multiple = signal.relativeMultiple;
         return `
           <article class="item-card" data-signal-card="${escapeHtml(signal.id)}">
             <div class="item-head">
@@ -446,13 +474,16 @@ function renderInbox() {
               ${tag(platformLabels[signal.platform] || signal.platform, "info")}
               ${tag(source?.name || source?.account || "未关联账号")}
               ${tag(`发布 ${displayDate(signal.publishedAt)}`)}
-              ${signal.relativeMultiple ? tag(`${signal.relativeMultiple}x`, "accent") : ""}
+              ${tag(`互动 ${signal.engagement ?? "未填"}`)}
+              ${median !== null && median !== undefined ? tag(`中位数 ${median}`) : ""}
+              ${multiple !== null && multiple !== undefined ? tag(`${multiple}x`, "accent") : ""}
+              ${source ? tag(`样本 ${source.engagementSampleCount || 0}`) : ""}
             </div>
             ${signal.note ? `<p class="item-note">${escapeHtml(signal.note)}</p>` : ""}
             <div class="inline-grid">
               <input name="engagement" type="number" min="0" placeholder="互动" value="${signal.engagement ?? ""}">
-              <input name="authorMedianEngagement" type="number" min="0" placeholder="中位数" value="${signal.authorMedianEngagement ?? ""}">
-              <input name="relativeMultiple" type="number" min="0" step="0.1" placeholder="倍数" value="${signal.relativeMultiple ?? ""}">
+              <input name="authorMedianEngagement" type="number" min="0" placeholder="中位数" value="${signal.authorMedianEngagement ?? ""}" ${medianIsAuto ? "readonly title=\"自动计算\"" : ""}>
+              <input name="relativeMultiple" type="number" min="0" step="0.1" placeholder="倍数" value="${signal.relativeMultiple ?? ""}" readonly title="自动计算">
             </div>
             <div class="item-actions">
               <button type="button" class="small-button" data-action="save-signal" data-id="${escapeHtml(signal.id)}">保存数据</button>
@@ -833,11 +864,15 @@ document.addEventListener("click", async (event) => {
       await advanceTopic(recordId);
     } else if (action === "save-signal") {
       const card = document.querySelector(`[data-signal-card="${CSS.escape(recordId)}"]`);
-      const engagement = Number(card.querySelector("[name='engagement']").value);
-      const median = Number(card.querySelector("[name='authorMedianEngagement']").value);
-      let multiple = Number(card.querySelector("[name='relativeMultiple']").value);
-      if (engagement > 0 && median > 0) multiple = Number((engagement / median).toFixed(2));
-      await updateRecord("signals", recordId, { engagement, authorMedianEngagement: median, relativeMultiple: multiple, seen: true });
+      const signal = state.signals.find((item) => item.id === recordId);
+      const engagementInput = card.querySelector("[name='engagement']");
+      const medianInput = card.querySelector("[name='authorMedianEngagement']");
+      const engagement = readNumberInput(engagementInput);
+      await updateRecord("signals", recordId, { engagement, seen: true });
+      if (!medianInput.readOnly && signal?.sourceId) {
+        const authorMedianEngagement = readNumberInput(medianInput);
+        await updateRecord("sources", signal.sourceId, { authorMedianEngagement });
+      }
     }
   } catch (error) {
     alert(error.message);

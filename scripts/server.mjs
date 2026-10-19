@@ -42,7 +42,9 @@ async function readState() {
   try {
     const text = await fs.readFile(dataFile, "utf8");
     const parsed = JSON.parse(text);
-    return { ...emptyState(), ...parsed, settings: { ...emptyState().settings, ...(parsed.settings || {}) } };
+    const state = { ...emptyState(), ...parsed, settings: { ...emptyState().settings, ...(parsed.settings || {}) } };
+    refreshEngagementMetrics(state);
+    return state;
   } catch (error) {
     if (error.code === "ENOENT") return emptyState();
     throw error;
@@ -101,7 +103,7 @@ async function readBody(request) {
 
 function identityKey(type, record = {}) {
   if (type === "sources") return record.url || record.id || id("source");
-  if (type === "signals") return record.url || record.id || id("signal");
+  if (type === "signals") return signalIdentityKey(record) || record.id || id("signal");
   if (type === "materials") return `${record.sourceUrl || ""}||${record.excerpt || ""}` || record.id || id("material");
   if (type === "topics") return (record.title || "").trim().toLowerCase() || record.id || id("topic");
   return record.id || id(type.replace(/s$/, ""));
@@ -115,11 +117,14 @@ function importRecords(state, type, records = []) {
   for (const incoming of records) {
     if (!incoming || typeof incoming !== "object") continue;
     const key = identityKey(type, incoming);
+    const patch = Object.fromEntries(
+      Object.entries(incoming).filter(([, value]) => value !== undefined && value !== null && value !== "")
+    );
     if (index.has(key)) {
       const current = index.get(key);
       index.set(key, {
         ...current,
-        ...incoming,
+        ...patch,
         id: current.id,
         updatedAt: now()
       });
@@ -139,6 +144,18 @@ function importRecords(state, type, records = []) {
   return { added, merged };
 }
 
+function signalIdentityKey(record = {}) {
+  const url = canonicalSignalUrl(record.url);
+  if (url) return url;
+  const parts = [
+    record.platform || "",
+    record.author || "",
+    record.title || "",
+    record.publishedAt || ""
+  ].map((value) => String(value).trim().toLowerCase());
+  return parts.some(Boolean) ? parts.join("||") : "";
+}
+
 function parseCount(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   const match = String(value ?? "").trim().match(/^([\d,.]+)\s*(万|亿|[kK])?\+?$/);
@@ -156,6 +173,74 @@ function normalizeUrl(value) {
     return url.toString();
   } catch {
     return "";
+  }
+}
+
+function canonicalSignalUrl(value) {
+  const normalized = normalizeUrl(value);
+  if (!normalized) return "";
+  const url = new URL(normalized);
+  const canonicalParams = new URLSearchParams();
+  for (const key of [...url.searchParams.keys()].sort()) {
+    if (/^utm_/i.test(key)) continue;
+    for (const paramValue of url.searchParams.getAll(key)) {
+      canonicalParams.append(key, paramValue);
+    }
+  }
+  const query = canonicalParams.toString();
+  url.search = query ? `?${query}` : "";
+  return url.toString();
+}
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  const value = sorted.length % 2
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
+  return Number(value.toFixed(2));
+}
+
+function refreshEngagementMetrics(state) {
+  const groups = new Map();
+  for (const signal of state.signals || []) {
+    const engagement = parseCount(signal.engagement);
+    if (engagement !== null) signal.engagement = engagement;
+    if (!signal.sourceId) continue;
+    if (!groups.has(signal.sourceId)) groups.set(signal.sourceId, []);
+    groups.get(signal.sourceId).push(signal);
+  }
+
+  for (const [sourceId, signals] of groups) {
+    const source = (state.sources || []).find((item) => item.id === sourceId);
+    if (!source) continue;
+    const samples = signals
+      .map((signal) => signal.engagement)
+      .filter((value) => Number.isFinite(value) && value > 0);
+    source.engagementSampleCount = samples.length;
+
+    let authorMedian = samples.length >= 3 ? median(samples) : null;
+    if (authorMedian === null && Number.isFinite(source.authorMedianEngagement) && source.authorMedianEngagement > 0) {
+      authorMedian = source.authorMedianEngagement;
+    }
+    if (authorMedian === null) {
+      source.authorMedianEngagement = null;
+      source.engagementSampleUpdatedAt = "";
+      for (const signal of signals) {
+        signal.authorMedianEngagement = null;
+        signal.relativeMultiple = null;
+      }
+      continue;
+    }
+
+    source.authorMedianEngagement = authorMedian;
+    source.engagementSampleUpdatedAt = samples.length >= 3 ? now() : "";
+    for (const signal of signals) {
+      signal.authorMedianEngagement = authorMedian;
+      signal.relativeMultiple = Number.isFinite(signal.engagement)
+        ? Number((signal.engagement / authorMedian).toFixed(2))
+        : null;
+    }
   }
 }
 
@@ -227,9 +312,12 @@ async function runCollection(state, sourceId) {
       });
       const items = parseFeed(xml);
       run.found = items.length;
+      run.duplicates = 0;
       for (const item of items) {
-        const exists = state.signals.some((signal) => signal.url === item.link);
-        if (exists) continue;
+        if (state.signals.some((signal) => signalIdentityKey(signal) === canonicalSignalUrl(item.link))) {
+          run.duplicates += 1;
+          continue;
+        }
         state.signals.unshift({
           id: id("signal"),
           sourceId: source.id,
@@ -301,15 +389,16 @@ function importBrowserCapture(state, sourceId, items) {
   }
   if (!Array.isArray(items) || items.length === 0) throw new Error("items must be a non-empty array");
 
-  const seen = new Set(state.signals.map((signal) => signal.url));
+  const seen = new Set((state.signals || []).map((signal) => signalIdentityKey(signal)));
   const candidates = [];
   const duplicateInputs = new Set();
   for (const item of items) {
     if (!item || typeof item !== "object") throw new Error("each item must be an object");
     const url = normalizeUrl(item.url);
     if (!url) throw new Error("each item needs a valid URL");
-    if (seen.has(url) || duplicateInputs.has(url)) continue;
-    duplicateInputs.add(url);
+    const key = canonicalSignalUrl(url);
+    if (seen.has(key) || duplicateInputs.has(key)) continue;
+    duplicateInputs.add(key);
     candidates.push({ ...item, url });
   }
 
@@ -321,6 +410,7 @@ function importBrowserCapture(state, sourceId, items) {
     finishedAt: "",
     found: items.length,
     created: 0,
+    duplicates: items.length - candidates.length,
     failureReason: "",
     nextAction: ""
   };
@@ -366,6 +456,7 @@ function importBrowserCapture(state, sourceId, items) {
   run.nextAction = run.created > 0 ? "到 Inbox 分流" : "无新内容，保持监控";
   source.lastRunStatus = run.status;
   source.lastRunAt = run.finishedAt;
+  refreshEngagementMetrics(state);
   return run;
 }
 
@@ -404,6 +495,7 @@ async function handleApi(request, response, pathname) {
     for (const type of ["sources", "signals", "materials", "topics"]) {
       totals[type] = importRecords(state, type, body[type] || []);
     }
+    refreshEngagementMetrics(state);
     await writeState(state);
     return sendJson(response, 200, { ok: true, totals }, request);
   }
@@ -413,6 +505,7 @@ async function handleApi(request, response, pathname) {
     const allowed = ["sources", "signals", "materials", "topics", "scripts", "publications", "reviews", "frictionLog"];
     if (!allowed.includes(type)) return sendJson(response, 400, { error: "unknown record type" }, request);
     const result = importRecords(state, type, [body.record || {}]);
+    refreshEngagementMetrics(state);
     await writeState(state);
     return sendJson(response, 200, { ok: true, ...result }, request);
   }
@@ -423,6 +516,7 @@ async function handleApi(request, response, pathname) {
     const index = state[type].findIndex((record) => record.id === recordId);
     if (index < 0) return sendJson(response, 404, { error: "record not found" }, request);
     state[type][index] = { ...state[type][index], ...patch, id: recordId, updatedAt: now() };
+    refreshEngagementMetrics(state);
     await writeState(state);
     return sendJson(response, 200, { ok: true, record: state[type][index] }, request);
   }
@@ -430,6 +524,7 @@ async function handleApi(request, response, pathname) {
   if (pathname === "/api/collect") {
     try {
       const run = await runCollection(state, body.sourceId);
+      refreshEngagementMetrics(state);
       await writeState(state);
       return sendJson(response, 200, { ok: true, run }, request);
     } catch (error) {

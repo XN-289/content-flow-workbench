@@ -437,6 +437,11 @@ textarea {
   border-radius: 5px;
 }
 
+.inline-grid input[readonly] {
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+
 .check-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
