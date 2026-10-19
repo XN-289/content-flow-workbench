@@ -253,6 +253,21 @@ textarea {
   resize: vertical;
 }
 
+.checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.checkbox-option input {
+  width: 16px;
+  min-height: 16px;
+  flex: 0 0 auto;
+}
+
 .primary-button,
 .small-button,
 .danger-button,
@@ -284,6 +299,58 @@ textarea {
 .list {
   display: grid;
   gap: 10px;
+}
+
+.command-center {
+  margin-bottom: 16px;
+}
+
+.command-center > .item-head {
+  align-items: flex-start;
+}
+
+.command-counts {
+  margin-top: 10px;
+}
+
+.command-queue {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  margin-top: 12px;
+}
+
+.command-item {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.command-item .item-title {
+  font-size: 13px;
+}
+
+.command-item .item-note {
+  margin: 3px 0 0;
+  line-height: 1.45;
+}
+
+.command-item .item-actions {
+  margin-top: 9px;
+}
+
+.command-item .item-actions .small-button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.command-details {
+  border-top: 1px solid var(--line);
+}
+
+.source-control-meta {
+  margin-top: 7px;
 }
 
 .item-card {
@@ -489,6 +556,10 @@ textarea {
   color: var(--accent);
   cursor: pointer;
   font-weight: 650;
+}
+
+.details form {
+  margin-top: 10px;
 }
 
 .extract-block + .extract-block {

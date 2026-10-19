@@ -4,6 +4,7 @@ data/workbench.json.*.tmp
 data/*.local.json
 data/exports/
 data/raw/
+data/backups/
 drops/*
 !drops/README.md
 bridge/*

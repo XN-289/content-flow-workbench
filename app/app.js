@@ -8,7 +8,8 @@ const navItems = [
   ["publish", "发布"],
   ["review", "复盘"],
   ["runs", "采集"],
-  ["agents", "桥接"]
+  ["agents", "桥接"],
+  ["backups", "备份"]
 ];
 
 const stageOrder = [
@@ -102,14 +103,69 @@ const agentTaskStatusLabels = {
   imported: "已导入"
 };
 
+const backupReasonLabels = {
+  manual: "手动",
+  auto: "自动",
+  "pre-restore": "恢复前"
+};
+
 const triggerLabels = {
   automatic: "自动",
   force: "强制",
   manual: "手动",
+  "browser-assisted": "浏览器辅助",
   "drop-folder": "投递箱",
   "drop-folder-manual": "投递箱手动",
   "quick-capture": "快速粘贴"
 };
+
+const coverageLabels = {
+  unknown: "覆盖范围待确认",
+  partial: "历史补采未完成",
+  complete: "已覆盖显示总数"
+};
+
+const controlStatusLabels = {
+  running: "运行中",
+  manual: "待人工",
+  backfill: "待补采",
+  due: "已到期",
+  failed: "失败",
+  cooldown: "冷却",
+  complete: "已覆盖",
+  monitoring: "监控中",
+  "on-demand": "按需",
+  research: "仅研究",
+  disabled: "已停用"
+};
+
+const controlStatusVariants = {
+  running: "info",
+  manual: "warn",
+  backfill: "warn",
+  due: "warn",
+  failed: "danger",
+  cooldown: "danger",
+  complete: "accent",
+  monitoring: "info",
+  "on-demand": "",
+  research: "",
+  disabled: ""
+};
+
+const commandCenterStatusOrder = [
+  "running",
+  "manual",
+  "backfill",
+  "due",
+  "failed",
+  "cooldown",
+  "complete",
+  "monitoring",
+  "on-demand",
+  "research",
+  "disabled"
+];
 
 const productionCheckLabels = {
   coreIdea: "核心观点",
@@ -132,6 +188,9 @@ let state = null;
 let currentView = "today";
 let inboxFilter = "inbox";
 let materialQuery = "";
+let backups = null;
+let backupRoot = "";
+let backupRetentionLimit = 100;
 
 const appNav = document.getElementById("nav");
 const viewEl = document.getElementById("view");
@@ -178,6 +237,13 @@ function topicById(id) {
   return state.topics.find((topic) => topic.id === id);
 }
 
+function browserCaptureToken(sourceId) {
+  const record = (state.runtime?.browserCapture || []).find((item) => item.sourceId === sourceId);
+  if (!record) throw new Error("采集 token 不存在，请刷新工作台后重新复制采集书签。");
+  if (new Date(record.expiresAt).getTime() <= Date.now()) throw new Error("采集 token 已过期，请刷新工作台后重新复制采集书签。");
+  return record.token;
+}
+
 function sourceOptions(selectedId = "") {
   const placeholder = state.sources.length
     ? `<option value="">自动匹配账号</option>`
@@ -188,10 +254,17 @@ function sourceOptions(selectedId = "") {
 }
 
 function xhsCollectorSource(sourceId) {
+  const endpoint = `http://127.0.0.1:${window.location.port || "5177"}/api/browser-capture`;
+  const expectedProfile = sourceById(sourceId)?.url.match(/\/user\/profile\/([A-Za-z0-9]+)/)?.[1] || "";
   return `
 (async () => {
   if (location.hostname !== "www.xiaohongshu.com" || !location.pathname.startsWith("/user/profile/")) {
     alert("请在小红书博主主页运行这个采集脚本。");
+    return;
+  }
+  const expectedProfile = ${JSON.stringify(expectedProfile)};
+  if (expectedProfile && !location.pathname.startsWith("/user/profile/" + expectedProfile)) {
+    alert("当前博主和这个采集书签不匹配，请使用对应账号的书签。");
     return;
   }
 
@@ -202,6 +275,23 @@ function xhsCollectorSource(sourceId) {
   const groups = Array.isArray(notesRoot) ? notesRoot : Object.values(notesRoot || {});
   const items = [];
   const seen = new Set();
+  const countFromText = (value) => {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.round(value);
+    const match = String(value || "").match(/([\\d,.]+)\\s*(万|亿|[kK])?/);
+    if (!match) return 0;
+    const base = Number(match[1].replace(/,/g, ""));
+    if (!Number.isFinite(base)) return 0;
+    const multiplier = match[2] === "亿" ? 100000000 : match[2] === "万" ? 10000 : match[2] ? 1000 : 1;
+    return Math.round(base * multiplier);
+  };
+  const profileState = window.__INITIAL_STATE__?.user?.userPageData || {};
+  const pageText = document.body?.innerText || "";
+  const noteTextMatch = pageText.match(/([\\d,.]+)\\s*(万|亿|[kK])?\\s*(?:篇)?笔记/);
+  const followerTextMatch = pageText.match(/([\\d,.]+)\\s*(万|亿|[kK])?\\s*(?:个)?粉丝/);
+  const context = {
+    profileNoteCount: countFromText(profileState.notes) || countFromText(noteTextMatch?.[0]),
+    profileFollowers: countFromText(profileState.followers) || countFromText(followerTextMatch?.[0])
+  };
 
   for (const group of groups) {
     const list = Array.isArray(group) ? group : Object.values(group || {});
@@ -238,16 +328,25 @@ function xhsCollectorSource(sourceId) {
   }
 
   try {
-    const response = await fetch("http://127.0.0.1:5177/api/browser-capture", {
+    const response = await fetch(${JSON.stringify(endpoint)}, {
       method: "POST",
       mode: "cors",
       credentials: "omit",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sourceId, items })
+      headers: {
+        "content-type": "application/json",
+        "x-capture-token": ${JSON.stringify(browserCaptureToken(sourceId))}
+      },
+      body: JSON.stringify({ sourceId, items, context })
     });
     const payload = await response.json();
     if (!response.ok || payload.ok === false) throw new Error(payload.error || "HTTP " + response.status);
-    alert("采集完成：发现 " + payload.run.found + " 条，新增 " + payload.run.created + " 条。");
+    let message = "采集完成：发现 " + payload.run.found + " 条，新增 " + payload.run.created + " 条。";
+    if (payload.run.profileNoteCount) {
+      message += "\\n本页已加载 " + payload.run.loadedCount + " 条，主页显示 " + payload.run.profileNoteCount + " 条，工作台累计 " + payload.run.collectedCount + " 条。";
+    } else {
+      message += "\\n本页已加载 " + payload.run.loadedCount + " 条；未识别到主页总笔记数，请继续滚动补齐目标范围。";
+    }
+    alert(message);
   } catch (error) {
     console.error("Personal Content Workbench capture", items, error);
     alert("直连本地工作台失败：" + error.message + "。已在控制台输出 items，可复制后回到账号页手动导入。");
@@ -293,6 +392,95 @@ function sourceScheduleTags(source) {
   }
   if (source.failureCount > 0) tags.push(tag(`失败 ${source.failureCount} 次`, "danger"));
   return tags.join("");
+}
+
+function controlRecordById(sourceId) {
+  return (state.runtime?.commandCenter?.records || []).find((record) => record.sourceId === sourceId) || null;
+}
+
+function commandCoverageText(record) {
+  if (!record?.coverage) return "覆盖范围待登记";
+  if (!record.coverage.totalNotes) {
+    return `本页加载 ${record.coverage.lastLoadedCount || 0} 条 · 主页总数待确认`;
+  }
+  const percent = record.coverage.percent === null || record.coverage.percent === undefined
+    ? ""
+    : ` · ${record.coverage.percent}%`;
+  return `累计 ${record.coverage.collectedCount || 0}/${record.coverage.totalNotes}${percent}`;
+}
+
+function renderCommandCenter() {
+  const commandCenter = state.runtime?.commandCenter;
+  if (!commandCenter) {
+    return `
+      <section class="panel">
+        <h2 class="panel-title">采集指挥中心</h2>
+        <div class="empty">指挥中心数据待加载，请刷新页面</div>
+      </section>
+    `;
+  }
+
+  const counts = commandCenterStatusOrder
+    .filter((status) => commandCenter.counts?.[status])
+    .map((status) => tag(`${controlStatusLabels[status]} ${commandCenter.counts[status]}`, controlStatusVariants[status]));
+
+  return `
+    <section class="panel command-center">
+      <div class="item-head">
+        <div>
+          <h2 class="panel-title">采集指挥中心</h2>
+          <p class="panel-note">按运行中、人工、补采、到期、失败优先排列；complete 只代表当前主页显示总数已覆盖。</p>
+        </div>
+        ${tag(commandCenter.automationEnabled ? "自动开" : "自动关", commandCenter.automationEnabled ? "accent" : "warn")}
+      </div>
+      <div class="item-meta command-counts">${counts.join("") || tag("暂无账号")}</div>
+      <div class="list command-queue">
+        ${commandCenter.records.length ? commandCenter.records.map((record) => {
+          const source = sourceById(record.sourceId);
+          return `
+            <article class="command-item" data-command-source="${escapeHtml(record.sourceId)}">
+              <div class="item-head">
+                <div>
+                  <h3 class="item-title">${escapeHtml(record.name)}</h3>
+                  <p class="item-note">${escapeHtml(record.nextAction || "暂无下一步")}</p>
+                </div>
+                ${tag(controlStatusLabels[record.controlStatus] || record.controlStatus, controlStatusVariants[record.controlStatus] || "")}
+              </div>
+              <div class="item-meta">
+                ${tag(platformLabels[record.platform] || record.platform || "未知平台", "info")}
+                ${tag(methodLabels[record.collectionMethod] || record.collectionMethod || "未设置")}
+                ${tag(commandCoverageText(record), record.controlStatus === "complete" ? "accent" : record.controlStatus === "backfill" ? "warn" : "")}
+                ${record.nextRunAt ? tag(`下次 ${displayDate(record.nextRunAt)}`) : ""}
+                ${record.failureCount ? tag(`失败 ${record.failureCount} 次`, "danger") : ""}
+              </div>
+              ${record.error ? `<p class="item-note danger-text">${escapeHtml(record.error)}</p>` : ""}
+              <div class="item-actions">
+                ${record.controlStatus === "running" || record.controlStatus === "disabled" ? "" : `<button type="button" class="small-button ${record.primaryAction === "run" ? "accent" : ""}" data-action="run-source" data-id="${escapeHtml(record.sourceId)}">运行采集</button>`}
+                ${source?.url ? `<a class="small-button" href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">打开主页</a>` : ""}
+                ${record.platform === "xiaohongshu" && record.collectionMethod === "browser-assisted" ? `
+                  <a class="small-button accent" draggable="true" href="${escapeHtml(xhsBookmarkletHref(record.sourceId))}" title="拖到浏览器书签栏">采集书签</a>
+                  <button type="button" class="small-button" data-action="copy-xhs-collector" data-id="${escapeHtml(record.sourceId)}">复制脚本</button>
+                ` : ""}
+              </div>
+              ${record.lastRun ? `
+                <details class="details command-details">
+                  <summary>最近运行：${escapeHtml(triggerLabels[record.lastRun.trigger] || record.lastRun.trigger || "手动")} · ${escapeHtml(displayDate(record.lastRun.startedAt))}</summary>
+                  <div class="item-meta">
+                    ${tag(`状态 ${record.lastRun.status}`, record.lastRun.status === "ok" ? "accent" : record.lastRun.status === "failed" ? "danger" : "warn")}
+                    ${tag(`发现 ${record.lastRun.found}`)}
+                    ${tag(`新增 ${record.lastRun.created}`)}
+                    ${tag(`重复 ${record.lastRun.duplicates}`)}
+                  </div>
+                  ${record.lastRun.failureReason ? `<p class="item-note danger-text">${escapeHtml(record.lastRun.failureReason)}</p>` : ""}
+                  ${record.lastRun.nextAction ? `<p class="item-note">运行建议：${escapeHtml(record.lastRun.nextAction)}</p>` : ""}
+                </details>
+              ` : `<p class="item-note">暂无采集运行记录</p>`}
+            </article>
+          `;
+        }).join("") : `<div class="empty">暂无账号，先用左侧快速登记导入对标博主</div>`}
+      </div>
+    </section>
+  `;
 }
 
 function isScheduledSource(source) {
@@ -360,7 +548,8 @@ function render() {
     publish: renderPublish,
     review: renderReview,
     runs: renderRuns,
-    agents: renderAgents
+    agents: renderAgents,
+    backups: renderBackups
   };
   viewEl.innerHTML = views[currentView]();
 }
@@ -479,21 +668,38 @@ function renderToday() {
 function renderSources() {
   const dueCount = state.sources.filter(isDueSource).length;
   const retryingCount = state.sources.filter((source) => source.automationStatus === "retrying").length;
+  const runtimeAutomation = state.runtime?.automation || {};
+  const effectiveAutomation = runtimeAutomation.effectiveEnabled ?? state.settings.automationEnabled !== false;
+  const envDisabled = runtimeAutomation.envDisabled === true;
+  const pageEnabled = runtimeAutomation.pageEnabled ?? state.settings.automationEnabled !== false;
+  const automationLabel = envDisabled ? "环境变量强制关" : effectiveAutomation ? "开" : "关";
 
   return `
     <section class="page-head">
       <div>
         <h1 class="page-title">对标账号</h1>
-        <p class="page-subtitle">账号注册表 · 自动化${state.settings.automationEnabled === false ? "关" : "开"} · 到期 ${dueCount} · 重试 ${retryingCount}</p>
+        <p class="page-subtitle">账号注册表 · 自动化${automationLabel} · 到期 ${dueCount} · 重试 ${retryingCount}</p>
       </div>
       <div class="head-actions">
         <button type="button" class="small-button accent" data-action="run-automation">检查到期采集</button>
         <button type="button" class="small-button" data-action="run-all">强制检查全部</button>
-        <button type="button" class="small-button" data-action="toggle-automation">${state.settings.automationEnabled === false ? "开启自动化" : "暂停自动化"}</button>
+        <button type="button" class="small-button" data-action="toggle-automation" ${envDisabled ? "disabled title=\"AUTOMATION_ENABLED=false 正在强制关闭自动化\"" : ""}>${pageEnabled ? "暂停页面自动化" : "开启页面自动化"}</button>
       </div>
     </section>
+    ${renderCommandCenter()}
     <div class="split">
       <div>
+        <section class="panel">
+          <h2 class="panel-title">对标账号快速登记</h2>
+          <form id="source-intake-form" class="form-grid">
+            <div class="field full">
+              <label>平台分享文案 / 主页链接</label>
+              <textarea name="text" rows="5" required placeholder="@博主名 在小红书已经有17.3万个粉丝，点击链接查看主页 >> https://..."></textarea>
+            </div>
+            <div class="form-actions"><button class="primary-button">登记并生成采集方案</button></div>
+          </form>
+          <p class="panel-note">小红书短链只解析到最终主页；历史内容仍按“手动滚动到哪、采集到哪”的可见范围入库，不做后台全量抓取。</p>
+        </section>
         <section class="panel">
           <h2 class="panel-title">添加账号</h2>
           <form id="source-form" class="form-grid">
@@ -549,13 +755,30 @@ function renderSources() {
                 </div>
                 ${tag(source.lastRunStatus || "never-run", source.lastRunStatus === "ok" ? "accent" : source.lastRunStatus === "failed" ? "danger" : "")}
               </div>
+              ${(() => {
+                const control = controlRecordById(source.id);
+                return control ? `
+                  <div class="item-meta source-control-meta">
+                    ${tag(controlStatusLabels[control.controlStatus] || control.controlStatus, controlStatusVariants[control.controlStatus] || "")}
+                    ${tag(commandCoverageText(control), control.controlStatus === "complete" ? "accent" : control.controlStatus === "backfill" ? "warn" : "")}
+                  </div>
+                  <p class="item-note">指挥中心：${escapeHtml(control.nextAction || "暂无下一步")}</p>
+                ` : "";
+              })()}
               <div class="item-meta">
                 ${tag(platformLabels[source.platform] || source.platform, "info")}
                 ${tag(methodLabels[source.collectionMethod] || source.collectionMethod || "未设置")}
                 ${tag(source.checkFrequency || "daily")}
                 ${sourceScheduleTags(source)}
                 ${source.authorMedianEngagement ? tag(`中位数 ${source.authorMedianEngagement} · 样本 ${source.engagementSampleCount || 0}`) : ""}
+                ${source.coverage ? tag(
+                  source.coverage.totalNotes
+                    ? `已入库 ${source.coverage.collectedCount || 0}/${source.coverage.totalNotes}${source.coverage.percent === null ? "" : ` · ${source.coverage.percent}%`}`
+                    : `本页最近加载 ${source.coverage.lastLoadedCount || 0} 条 · 总数待确认`,
+                  source.coverage.status === "complete" ? "accent" : source.coverage.status === "partial" ? "warn" : ""
+                ) : ""}
               </div>
+              ${source.coverage ? `<p class="item-note">${escapeHtml(coverageLabels[source.coverage.status] || source.coverage.status)}；需要补历史时，在原主页继续向下滚动并重复点击采集书签。</p>` : ""}
               ${source.lastCollectionError ? `<p class="item-note danger-text">${escapeHtml(source.lastCollectionError)}</p>` : ""}
               ${source.keepReason ? `<p class="item-note">${escapeHtml(source.keepReason)}</p>` : ""}
               <div class="item-actions">
@@ -649,6 +872,20 @@ function renderInbox() {
                 ` : ""}
               </details>
             ` : ""}
+            <details class="details">
+              <summary>编辑信号</summary>
+              <form class="form-grid" data-edit-form="signals" data-id="${escapeHtml(signal.id)}">
+                <div class="field full"><label>标题</label><input name="title" value="${escapeHtml(signal.title || "")}" required></div>
+                <div class="field"><label>作者</label><input name="author" value="${escapeHtml(signal.author || "")}"></div>
+                <div class="field"><label>去向</label>
+                  <select name="disposition">
+                    ${Object.entries(dispositionLabels).map(([value, label]) => `<option value="${escapeHtml(value)}" ${signal.disposition === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+                  </select>
+                </div>
+                <div class="field full"><label>判断备注</label><textarea name="note">${escapeHtml(signal.note || "")}</textarea></div>
+                <div class="form-actions"><button class="primary-button" type="submit">保存信号</button></div>
+              </form>
+            </details>
             <div class="inline-grid">
               <input name="engagement" type="number" min="0" placeholder="互动" value="${signal.engagement ?? ""}">
               <input name="authorMedianEngagement" type="number" min="0" placeholder="中位数" value="${signal.authorMedianEngagement ?? ""}" ${medianIsAuto ? "readonly title=\"自动计算\"" : ""}>
@@ -716,6 +953,31 @@ function renderMaterials() {
                 ${tag(material.possibleUse || "未标注用途")}
                 ${material.sourceUrl ? tag("有来源") : tag("缺来源", "warn")}
               </div>
+              <details class="details">
+                <summary>编辑素材</summary>
+                <form class="form-grid" data-edit-form="materials" data-id="${escapeHtml(material.id)}">
+                  <div class="field"><label>平台</label>
+                    <select name="platform">
+                      ${Object.entries(platformLabels).map(([value, label]) => `<option value="${escapeHtml(value)}" ${material.platform === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+                    </select>
+                  </div>
+                  <div class="field"><label>类型</label>
+                    <select name="type">
+                      ${[["opinion", "观点"], ["case", "案例"], ["data", "数据"], ["quote", "金句"], ["hot-comment", "热评"], ["counter-example", "反例"], ["lead", "线索"]].map(([value, label]) => `<option value="${escapeHtml(value)}" ${material.type === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+                    </select>
+                  </div>
+                  <div class="field"><label>作者 / 评论者</label><input name="author" value="${escapeHtml(material.author || "")}"></div>
+                  <div class="field"><label>可用方向</label>
+                    <select name="possibleUse">
+                      ${[["hook", "开头钩子"], ["evidence", "论证证据"], ["case", "案例"], ["title", "标题"], ["audience-language", "受众语言"]].map(([value, label]) => `<option value="${escapeHtml(value)}" ${material.possibleUse === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+                    </select>
+                  </div>
+                  <div class="field full"><label>原文摘录</label><textarea name="excerpt" required>${escapeHtml(material.excerpt || "")}</textarea></div>
+                  <div class="field full"><label>为什么好</label><textarea name="whyValuable" required>${escapeHtml(material.whyValuable || "")}</textarea></div>
+                  <div class="field full"><label>引用注意</label><input name="citationNote" value="${escapeHtml(material.citationNote || "")}"></div>
+                  <div class="form-actions"><button class="primary-button" type="submit">保存素材</button></div>
+                </form>
+              </details>
               <div class="item-actions">
                 <button type="button" class="small-button accent" data-action="material-topic" data-id="${escapeHtml(material.id)}">转选题</button>
               </div>
@@ -754,6 +1016,16 @@ function renderTopics() {
               </div>
               <p class="item-body">${escapeHtml(topic.coreIdea || "")}</p>
               <div class="item-meta">${tag(topic.targetReader || "读者待补")}${tag(topic.minimalPublishableVersion || "最小版本待补")}</div>
+              <details class="details">
+                <summary>编辑选题</summary>
+                <form class="form-grid" data-edit-form="topics" data-id="${escapeHtml(topic.id)}">
+                  <div class="field full"><label>标题</label><input name="title" value="${escapeHtml(topic.title || "")}" required></div>
+                  <div class="field full"><label>核心观点</label><textarea name="coreIdea" required>${escapeHtml(topic.coreIdea || "")}</textarea></div>
+                  <div class="field full"><label>目标读者</label><input name="targetReader" value="${escapeHtml(topic.targetReader || "")}" required></div>
+                  <div class="field full"><label>最小可发布版本</label><input name="minimalPublishableVersion" value="${escapeHtml(topic.minimalPublishableVersion || "")}" required></div>
+                  <div class="form-actions"><button class="primary-button" type="submit">保存选题</button></div>
+                </form>
+              </details>
               <div class="item-actions"><button type="button" class="small-button accent" data-action="advance-topic" data-id="${escapeHtml(topic.id)}">下一阶段</button></div>
             </article>
           `).join("") : `<div class="empty">暂无选题</div>`}
@@ -920,7 +1192,7 @@ function renderRuns() {
     <section class="panel">
       <div class="table-wrap">
         <table class="run-table">
-          <thead><tr><th>时间</th><th>账号</th><th>触发</th><th>状态</th><th>发现 / 新增</th><th>失败原因</th><th>下一步</th></tr></thead>
+          <thead><tr><th>时间</th><th>账号</th><th>触发</th><th>状态</th><th>发现 / 新增</th><th>覆盖</th><th>失败原因</th><th>下一步</th></tr></thead>
           <tbody>
             ${state.collectionRuns.length ? state.collectionRuns.slice(0, 50).map((run) => `
               <tr>
@@ -929,10 +1201,11 @@ function renderRuns() {
                 <td>${escapeHtml(triggerLabels[run.trigger] || run.trigger || "手动")}</td>
                 <td>${escapeHtml(run.status)}</td>
                 <td>${run.found || 0} / ${run.created || 0}</td>
+                <td>${run.profileNoteCount ? `${run.collectedCount || 0}/${run.profileNoteCount}${run.coveragePercent === null ? "" : ` · ${run.coveragePercent}%`}` : run.loadedCount ? `本页 ${run.loadedCount}` : "-"}</td>
                 <td>${escapeHtml(run.failureReason || "-")}</td>
                 <td>${escapeHtml(run.nextAction || "-")}</td>
               </tr>
-            `).join("") : `<tr><td colspan="7"><div class="empty">暂无运行记录</div></td></tr>`}
+            `).join("") : `<tr><td colspan="8"><div class="empty">暂无运行记录</div></td></tr>`}
           </tbody>
         </table>
       </div>
@@ -945,6 +1218,62 @@ function agentTaskVariant(status) {
   if (status === "result-ready") return "accent";
   if (status === "imported") return "";
   return "warn";
+}
+
+function formatBytes(size) {
+  const value = Number(size || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function loadBackups() {
+  const result = await api("/api/backups");
+  backups = result.backups;
+  backupRoot = result.backupRoot;
+  backupRetentionLimit = result.retentionLimit;
+  if (currentView === "backups") render();
+}
+
+function renderBackups() {
+  return `
+    <section class="page-head">
+      <div><h1 class="page-title">备份</h1><p class="page-subtitle">${escapeHtml(backupRoot || "BACKUP_DIR 未配置")} · 保留 ${backupRetentionLimit} 份</p></div>
+      <div class="head-actions">
+        <button type="button" class="small-button" data-action="refresh-backups">刷新列表</button>
+        <button type="button" class="small-button accent" data-action="create-backup">立即备份</button>
+      </div>
+    </section>
+    <section class="panel">
+      <h2 class="panel-title">备份列表</h2>
+      <div class="list">
+        ${backups === null ? `<div class="empty">正在读取备份</div>` : ""}
+        ${backups !== null && !backups.length ? `<div class="empty">暂无备份</div>` : ""}
+        ${(backups || []).map((backup) => `
+          <article class="item-card">
+            <div class="item-head">
+              <h3 class="item-title mono">${escapeHtml(backup.filename || backup.id)}</h3>
+              ${backup.invalid ? tag("无效", "danger") : tag(backupReasonLabels[backup.reason] || backup.reason || "未知")}
+            </div>
+            ${backup.invalid ? "" : `
+              <div class="item-meta">
+                ${tag(displayDate(backup.createdAt))}
+                ${tag(formatBytes(backup.size))}
+                ${tag(`账号 ${backup.counts.sources}`)}
+                ${tag(`信号 ${backup.counts.signals}`)}
+                ${tag(`素材 ${backup.counts.materials}`)}
+                ${tag(`选题 ${backup.counts.topics}`)}
+              </div>
+              <div class="item-actions">
+                <button type="button" class="small-button warn-button" data-action="restore-backup" data-id="${escapeHtml(backup.filename)}">恢复这份</button>
+              </div>
+            `}
+          </article>
+        `).join("")}
+      </div>
+      <p class="panel-note">备份包含账号链接、评论摘录和个人素材，只保存在本机。恢复会先自动保存当前状态。</p>
+    </section>
+  `;
 }
 
 function renderAgents() {
@@ -981,6 +1310,12 @@ function renderAgents() {
             <div class="field full"><label>任务名</label><input name="title" required></div>
             <div class="field full"><label>目标</label><textarea name="objective" required></textarea></div>
             <div class="field full"><label>输出要求</label><textarea name="outputRequirements"></textarea></div>
+            <div class="field full">
+              <label class="checkbox-option">
+                <input type="checkbox" name="mirrorToDrive" ${driveConnected ? "" : "disabled"}>
+                <span>同步任务包到 Google Drive（默认仅保存在本机）</span>
+              </label>
+            </div>
             <div class="form-actions"><button class="primary-button" type="submit">生成任务包</button></div>
           </form>
         </section>
@@ -1047,8 +1382,7 @@ async function signalToMaterial(signalId) {
   const signal = state.signals.find((item) => item.id === signalId);
   if (!signal) return;
   const dataPoint = Array.isArray(signal.dataPointCandidates) ? signal.dataPointCandidates[0] : "";
-  const excerpt = dataPoint
-    || String(signal.contentText || "").trim().slice(0, 600)
+  const excerpt = String(signal.contentText || "").trim().slice(0, 600)
     || signal.title
     || signal.note
     || signal.url;
@@ -1056,11 +1390,13 @@ async function signalToMaterial(signalId) {
     sourceUrl: signal.url,
     platform: signal.platform,
     author: signal.author,
-    type: dataPoint ? "data" : "lead",
+    type: "lead",
     excerpt,
     whyValuable: "待判断",
     possibleUse: "evidence",
-    citationNote: dataPoint ? "自动抽取的数据口径候选，发布前必须回原文核对" : "来自 Inbox 转入，引用前核对上下文",
+    citationNote: dataPoint
+      ? `包含自动抽取数据口径候选，未经人工核对：${dataPoint}`
+      : "来自 Inbox 转入，引用前核对上下文",
     topicIds: []
   });
   await updateRecord("signals", signalId, { disposition: "material", seen: true });
@@ -1069,15 +1405,25 @@ async function signalToMaterial(signalId) {
 async function signalToTopic(signalId, directProduction = false) {
   const signal = state.signals.find((item) => item.id === signalId);
   if (!signal) return;
+  const materialIds = state.materials
+    .filter((material) => material.sourceUrl === signal.url)
+    .map((material) => material.id);
+  const title = signal.title || signal.note || "未命名选题";
   await saveRecord("topics", topicDefaults({
-    title: signal.title || signal.note || "未命名选题",
+    title,
     coreIdea: signal.note || "待补核心观点",
     targetReader: "待补",
     sourceSignalIds: [signalId],
-    materialIds: [],
+    materialIds,
     minimalPublishableVersion: "一条 60-120 秒口播",
-    stage: directProduction ? "outline" : "topic"
+    stage: "topic"
   }));
+  if (directProduction) {
+    const createdTopic = state.topics.find((topic) => (
+      topic.title === title && (topic.sourceSignalIds || []).includes(signalId)
+    ));
+    if (createdTopic) await updateRecord("topics", createdTopic.id, { stage: "outline" });
+  }
   await updateRecord("signals", signalId, { disposition: directProduction ? "produce" : "topic", seen: true });
 }
 
@@ -1104,6 +1450,7 @@ document.addEventListener("click", async (event) => {
       currentView = button.dataset.view;
       renderNav();
       render();
+      if (currentView === "backups") await loadBackups();
     } else if (action === "refresh") {
       await loadState();
     } else if (action === "filter-inbox") {
@@ -1134,6 +1481,18 @@ document.addEventListener("click", async (event) => {
       const result = await api("/api/agent-tasks/scan", "POST", {});
       await loadState();
       alert(`扫描完成：${result.changed ? "有新结果" : "暂无更新"}，当前待导入 ${result.readyCount} 条。`);
+    } else if (action === "refresh-backups") {
+      await loadBackups();
+    } else if (action === "create-backup") {
+      const result = await api("/api/backups/create", "POST", {});
+      await loadBackups();
+      alert(result.backup.created ? `已创建备份：${result.backup.filename}` : `内容未变化，沿用备份：${result.backup.filename}`);
+    } else if (action === "restore-backup") {
+      if (!confirm("确认恢复这份备份？当前状态会先自动保存为“恢复前”备份。")) return;
+      await api("/api/backups/restore", "POST", { filename: recordId });
+      await loadState();
+      await loadBackups();
+      alert("备份已恢复。");
     } else if (action === "run-agent-task") {
       await api("/api/agent-tasks/run", "POST", { id: recordId });
       await loadState();
@@ -1235,7 +1594,9 @@ document.addEventListener("submit", async (event) => {
   if (!form) return;
   event.preventDefault();
   try {
-    if (form.id === "quick-capture") {
+    if (form.dataset.editForm) {
+      await updateRecord(form.dataset.editForm, form.dataset.id, formObject(form));
+    } else if (form.id === "quick-capture") {
       const data = formObject(form);
       const result = await api("/api/capture", "POST", { text: data.text, sourceId: data.sourceId });
       alert(`解析完成：发现 ${result.run.found} 条，新增 ${result.run.created} 条，重复 ${result.run.duplicates} 条。`);
@@ -1249,6 +1610,11 @@ document.addEventListener("submit", async (event) => {
         lastCollectionError: "",
         tags: []
       });
+    } else if (form.id === "source-intake-form") {
+      const data = formObject(form);
+      const result = await api("/api/source-intake", "POST", { text: data.text });
+      await loadState();
+      alert(result.nextAction);
     } else if (form.id === "import-form") {
       const file = form.file.files[0];
       const text = await file.text();

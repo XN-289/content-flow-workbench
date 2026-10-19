@@ -1,6 +1,6 @@
 # Agent Bridge
 
-- 版本：v0.1
+- 版本：v0.2
 - 日期：2026-10-19
 - 适用范围：本地单人工作台与 Grok、Muse、Codex、Claude、Cursor 的轻量任务包协作；不做通用聊天入口和 Agent 平台
 
@@ -39,17 +39,25 @@ bridge/outbox/<task-id>/
   task.json       # 任务元数据
   task.md         # 完整 Prompt 与上下文
   result.md       # Agent 输出
+  task.lock       # 本机 Agent 运行锁；仅运行期存在
   run-codex.ps1   # Codex 任务生成
   run-claude.ps1  # Claude 任务生成
 ```
 
-如果配置了 Google Drive 桌面同步目录，同一任务会镜像到：
+如果配置了 Google Drive 桌面同步目录，并且创建任务时显式勾选“同步任务包到 Google Drive”，该任务才会镜像到：
 
 ```text
 <Google Drive>/ContentFlowWorkbench/Outbox/<task-id>/
 ```
 
 本地与云盘两侧的 `result.md` 都会被扫描，系统取修改时间更新的一版，并把它同步到另一侧。`bridge/` 中真实任务内容不进入 Git。
+
+### 结果与运行锁
+
+- `result.md` 只表示一份完整可导入的结果。Codex / Claude 本机脚本先写 `result.pending.md`，命令成功结束后用原子替换生成 `result.md`。
+- `task.lock` 记录任务 ID、实际 PowerShell PID 和获取时间。任务正常结束或失败退出后删除。
+- 服务重启后会读取运行中任务的锁：PID 仍存活时任务保持 `running`，等待结果回流；PID 已消失时恢复为 `outbox`，提示重跑或扫描结果，并清理失效锁。
+- Grok、Muse、Cursor 等人工回写场景仍要求保存完成后再写 `result.md`；工作台不会把半成品主动升级为终稿。
 
 ## 4. Google Drive 配置
 
@@ -58,7 +66,7 @@ bridge/outbox/<task-id>/
 1. 安装并登录 Google Drive 桌面版。
 2. 确认它在资源管理器中显示为本地目录，例如 `G:/Google Drive` 或用户目录下的 `Google Drive`。
 3. 在工作台“桥接”页粘贴该目录，保存连接。
-4. 新建任务时，系统会自动创建 `ContentFlowWorkbench/Outbox/<task-id>/`。
+4. 新建任务时默认仅保存本地 `bridge/outbox/<task-id>/`；只有勾选镜像后才创建 `ContentFlowWorkbench/Outbox/<task-id>/`。
 
 如果目录不存在，保存会失败并提示先启动 Google Drive。这个失败是有意的，避免把任务写到错误位置。
 
@@ -118,6 +126,7 @@ Prompt 固定要求 Agent：
 ```powershell
 node --check scripts/server.mjs
 node --check app/app.js
+npm run test:chain
 ```
 
 功能冒烟建议用临时数据文件与临时 `BRIDGE_ROOT`，不要直接用真实主数据测试云端同步。

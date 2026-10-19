@@ -1,14 +1,16 @@
 # PROJECT_STATE
 
-Updated: 2026-10-19 13:54
+Updated: 2026-10-19 18:09
 Current phase: implementation
 
 ## 一句话现状
 
-已完成 Park 原型分析、North Star 路线图和第一版本地 MVP：工作台可通过 `npm start` 在本机运行，包含今日、账号、Inbox、素材、选题、生产、发布、复盘、采集和桥接十个视图；服务端已内置轻量自动调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面自动解析、正文全文 / 图片描述 / 数据口径候选抽取、多层身份去重、自动去重分级、每日晨报，以及 Grok / Muse / Codex / Claude / Cursor 的 Agent 任务包与结果回流。Google Drive 第一版通过桌面同步目录镜像，不做 OAuth。第一个真实小红书对标账号已入库，8 条笔记进入 Inbox，作者互动中位数和信号相对倍数已支持自动计算。仓库已补齐 README、TODO 和交接上下文，真实账号明细、素材与 Agent 任务内容只保存在本地或用户显式选择的同步目录。
+已完成 Park 原型分析、North Star 路线图和第一版本地 MVP：工作台可通过 `npm start` 在本机运行，包含今日、账号、Inbox、素材、选题、生产、发布、复盘、采集、桥接和备份十一个视图；最终形态已确认为 Windows 单用户本地桌面应用，当前 localhost 服务只是先跑通真实流程的运行壳。服务端已内置轻量自动调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面自动解析、正文全文 / 图片描述 / 数据口径候选抽取、多层身份去重、自动去重分级、每日晨报，以及 Grok / Muse / Codex / Claude / Cursor 的 Agent 任务包与结果回流；signal / material / topic 已提供页面内轻量编辑表单，主数据支持变更前自动备份、内容哈希去重、保留 100 份、显式恢复、静态路径边界、请求体上限和更新字段白名单。端到端链路已完成 4 视角对抗审查和 17 项临时数据回归，选题状态机、发布门槛、对象身份、Agent 任务锁、结果原子写入和备份恢复均已收紧。对标账号支持分享文案快速登记、可见范围重复采集去重和覆盖率留痕，重复登记不会重置已采集进度。外部项目调研已扩展到采集控制面、收藏归档、媒体下载、Agent 浏览器和平台特定导出方案；采集指挥中心已实现，下一步优先建立分层证据包。Google Drive 第一版通过桌面同步目录显式镜像，不做 OAuth。第一个真实小红书对标账号已入库，8 条笔记进入 Inbox，作者互动中位数和信号相对倍数已支持自动计算。仓库已补齐 README、TODO 和交接上下文，真实账号明细、素材、备份与 Agent 任务内容只保存在本地或用户显式选择的同步目录。
 
 ## 已接受事实
 
+- 外部自动化调研完成：下一阶段优先补采集指挥中心、统一采集结果信封、平台能力矩阵、快照差异和轻量 doctor，不引入更激进的平台抓取器 — `docs/external-automation-research.md`
+- 补充外部调研完成：ArchiveBox、Karakeep、linkding、SingleFile、yt-dlp、gallery-dl、Playwright / Playwright MCP、browser-use 及抖音、公众号、X 平台特定项目已纳入对比；可吸收的是分层证据包、幂等媒体归档、能力声明和可见范围导出，不吸收登录态批量抓取、身份池、代理、指纹伪装或验证码处理 — `docs/external-automation-research.md`
 - 当天 X 搜索 `from:xparkzz filter:videos` 可见 3 条相关视频，已分别下载、抽帧、OCR 并交叉分析 — `docs/park-prototype-analysis.md`
 - 1:15 补充演示是最重要的 UI 原型，展示一条爆款信号从发现到 7 个平台发布的完整链路 — `docs/park-prototype-analysis.md` 第 2.2、3 节
 - 项目方向调整为以 Park Content Studio 为第一优先级原型 — `decisions.md`、`PLAN.md` v0.2
@@ -25,16 +27,21 @@ Current phase: implementation
 - 项目已初始化本地 Git 主分支 `main`，远端为 `https://github.com/XN-289/content-flow-workbench.git`；真实主数据 `data/workbench.json` 已加入 `.gitignore`，不进入版本历史
 - 发布前安全扫描未在项目文件和 Git 历史中发现疑似密钥；29 个唯一疑似值仅存在于 Codex 本地会话日志，不属于 GitHub 交付面
 - 第一个真实对标账号为小红书账号；昵称、主页、笔记链接和采集参数只保存在 `data/workbench.json`
+- 对标账号快速登记和可见范围覆盖率已通过临时数据回归：首次采集、重复采集去重、补齐到 complete、重复登记保留覆盖率均通过 — `scripts/chain-regression.mjs` 16 项结果
 - 浏览器辅助采集第一批可见笔记 8 条已入库，最高互动 `5.9万` 已解析为 `59000` — `data/workbench.json`
 - 第一轮只有 8 条的原因是无障碍树后续链接被截断；新采集书签改为读取页面状态中的 `noteId + xsecToken`，但只能覆盖用户手动滚动后已加载的数据 — `docs/xhs-collection-research.md`
 - AIHOT 的可吸收模式是统一 adapter、独立调度、下次运行时间、失败退避、singleton 运行和健康状态可见；其 Postgres、pg-boss、Docker 和三进程架构不进入本项目 — `docs/automation-research.md`
+- MediaCrawler、catbus、creatorhub、changedetection.io、RSSHub、Crawlee、Maxun、social-auto-upload 等项目调研完成；可吸收的是统一结果信封、能力矩阵、任务意图、快照差异、分类错误、冷却恢复和人工关卡，不吸收登录态后台抓取、自动滚动、私有接口、签名、验证码识别、代理池或指纹伪装 — `docs/external-automation-research.md`
 - 本地投递箱已通过临时数据验证：2 个有效文件新增 3 条记录，坏 JSON 进入 `failed/`；重复投递新增 0、识别重复 2 — `tmp/automation-drop-test` 测试后已删除
 - 快速粘贴已在临时数据验证：一次输入发现 3 条记录，新增 1 条信号和 2 条热评素材；重复投递新增 0 — 本轮 `tmp/automation-live-test-3` 命令结果，目录不入 Git
 - 公开页面自动解析已在临时数据验证：mock 页面自动生成 1 条公众号信号，第二次强制采集 `found 1 / created 0` — 本轮临时测试命令结果
 - 小红书同一内容 ID 在 `explore/:id` 与 `discovery/item/:id` 两种路径下已被识别为重复；多层身份去重修复后信号数量不再因同一条记录命中多个 key 而膨胀 — 本轮临时测试命令结果
 - 正文 / 图片 / 数据候选抽取已在临时服务验证：快速粘贴、公开页面和 RSS 均保存正文；公开页面提取图片描述；三类入口均生成数据口径候选；重复采集 `created 0 / duplicates 1` — 本轮 `tmp/extraction-live-test` 命令结果，测试数据不入 Git
 - 用户确认希望连接 Grok、Muse 等云端 Agent，使用本机 Codex、Claude、Cursor，并用 Google Drive 作为轻量协作空间 — 2026-10-19 用户需求
+- 用户确认最终产品形态是只给自己使用的 Windows 本地桌面应用，希望长期打磨体验，不做公开分发或多用户 SaaS — 2026-10-19 用户需求
 - Agent 桥接不使用平台登录态、不保存云服务 API Key、不把 Agent 输出自动升级为已核实事实 — `decisions.md`、`docs/agent-bridge.md`
+- Boole / Carson / Bohr / Leibniz 四个视角完成端到端对抗审查；未发现 P0，发现的链路断点已修复并通过回归 — 本轮 `scripts/chain-regression.mjs` 结果
+- 本地备份采用 JSON 快照和显式恢复；真实备份只保存在本机 `data/backups/`，不进入 Git — `decisions.md`、`.gitignore`
 
 ## 决策索引
 
@@ -60,11 +67,17 @@ Current phase: implementation
 - 2026-10-19 — 本地常驻采用当前用户登录任务 — `decisions.md`
 - 2026-10-19 — 抽取结果只作为候选，不当作已核实事实 — `decisions.md`
 - 2026-10-19 — Agent 协作采用任务包与结果回流桥接 — `decisions.md`
+- 2026-10-19 — 端到端链路采用服务端状态机、幂等身份和可重复回归 — `decisions.md`、`docs/end-to-end-chain.md`
+- 2026-10-19 — 最终形态定为 Windows 单用户本地桌面应用 — `decisions.md`
+- 2026-10-19 — 本地备份采用 JSON 快照与显式恢复 — `decisions.md`
+- 2026-10-19 — 对标账号采用快速登记加可见覆盖率 — `decisions.md`
+- 2026-10-19 — 采集自动化吸收外部项目的控制面模式 — `decisions.md`
+- 2026-10-19 — 重要信号采用分层证据包 — `decisions.md`
 
 ## 已实现
 
 - 原型分析文档 — `docs/park-prototype-analysis.md` — UTF-8 读取检查通过，包含资料范围、稳定结构、可吸收原则、第一版骨架和待确认问题
-- 项目计划 v0.7 — `PLAN.md` — 增加账号注册、自动采集流水线、自动化分级、采集骨架和小红书可见状态采集边界
+- 项目计划 v0.8 — `PLAN.md` — 增加账号注册、自动采集流水线、自动化分级、Agent 桥接、Google Drive 显式镜像、选题状态机和链路回归验收
 - North Star 路线图 v0.2 — `docs/north-star-roadmap.md` — 定义账号采集入口、自动采集生产线、动画生产线、四个显性计数、Phase 0-5 和数据契约
 - 阶段待办清单 — `TODO.md` — 覆盖 North Star 基线、本地闭环、采集骨架、生产结构化、动画工作室、多平台打包和数据回流
 - 本地输入与日常节奏文档 v0.2 — `docs/local-input-workflow.md` — 定义自动采集、快速收集、结构化导入、早上 45 分钟流程、口播生产块和摩擦记录
@@ -73,6 +86,7 @@ Current phase: implementation
 - 每日采集脚本 — `scripts/collect-all.mjs` — `npm run collect` 在空账号状态下执行通过
 - 启动说明 — `README.md` — 包含启动、每日采集和当前采集能力边界
 - 浏览器辅助采集闭环 — `scripts/server.mjs`、`app/app.js` — 支持账号页粘贴可见列表 JSON，保存原始快照、URL 去重、解析 `万 / 亿 / k / +` 互动数并导入 Inbox
+- 对标账号快速登记与覆盖率 — `scripts/server.mjs`、`app/app.js` — 支持分享文案识别、小红书短链无凭据解析、可见范围采集覆盖率、重复采集去重和重复登记保护；16 项链路回归通过
 - 小红书采集调研与书签 — `docs/xhs-collection-research.md`、`scripts/server.mjs`、`app/app.js` — 对比 XHS-Downloader、social-media-copilot、逆向方案和 Beav；实现账号页生成采集书签、受限 CORS 和页面状态提取，语法、预检、入库与去重已在临时数据文件验证
 - 作者互动基线 — `scripts/server.mjs`、`app/app.js`、`app/styles.css` — 样本数不低于 3 时自动计算作者中位数和相对倍数，Inbox 按信号强度排序并展示样本量；规范化 URL、UTM 参数、query 顺序去重和空互动保存在临时数据与本地页面验证通过
 - 轻量自动调度器 — `scripts/server.mjs`、`scripts/collect-all.mjs`、`app/app.js`、`docs/automation-research.md` — 服务端每分钟检查到期信源；支持每日 / 每周档期、失败指数退避、同源并发保护、待人工提醒、强制检查、自动化暂停 / 恢复和运行状态可视化，不新增依赖
@@ -81,7 +95,14 @@ Current phase: implementation
 - 公开页面自动解析 — `scripts/server.mjs` — 支持 Open Graph、JSON-LD Article、canonical、作者、发布时间、描述和同站链接提取，并自动生成 Inbox 信号；mock 页面重复采集验证通过
 - 正文与线索抽取 — `scripts/server.mjs`、`app/app.js`、`app/styles.css`、`data/import-template.json` — 支持 RSS 正文、公开页面正文、图片描述、数据口径候选、快速粘贴 / 本地文本正文保存；Inbox 展示拆解线索并可转数据素材；临时服务接口测试通过
 - Agent 桥接 — `scripts/server.mjs`、`app/app.js`、`bridge/README.md`、`docs/agent-bridge.md` — 支持七类任务、五个 Agent 目标、任务上下文打包、本地任务包、Google Drive 桌面同步镜像、Codex / Claude 本机脚本、双侧结果扫描与导入；临时服务已验证 Drive 回流、outline 导入 scripts、research 导入 materials、重复扫描不重复导入
+- 端到端链路回归 — `scripts/server.mjs`、`scripts/chain-regression.mjs`、`docs/end-to-end-chain.md` — 覆盖重复导入保护、相邻阶段推进、三平台发布与复盘门槛、对标登记与覆盖率、RSS 失败识别、投递箱稳定检测、页面与书签冒烟、备份恢复、Agent 存活恢复和 stale lock 清理；16 项全部通过，测试全部使用临时目录
+- 记录编辑闭环 — `app/app.js`、`app/styles.css` — Inbox、素材、选题卡片支持折叠编辑表单，统一走 `/api/update`；信号来源链接、素材来源链接和选题阶段不直接暴露编辑，避免破坏身份与状态机；`node --check app/app.js` 和 15 项链路回归通过
+- 本地备份与恢复 — `scripts/server.mjs`、`app/app.js`、`scripts/chain-regression.mjs` — 支持变更前自动快照、手动备份、内容哈希去重、100 份保留、恢复前保底、格式校验、Agent 运行中禁止恢复和非法文件名拒绝；15 项临时数据回归通过
 - Windows 登录常驻任务 — `scripts/install-startup-task.ps1`、`package.json` — `npm run setup-task` 为当前用户安装并启动本地服务任务，`npm run remove-task` 移除；PowerShell 语法检查通过，尚未在用户机器注册
+- 外部自动化项目调研 — `docs/external-automation-research.md` — 对比 MediaCrawler、catbus、creatorhub、changedetection.io、RSSHub、Huginn、n8n、Crawlee、Maxun、social-auto-upload、Beav、ArchiveBox、Karakeep、linkding、SingleFile、yt-dlp、gallery-dl、Playwright / Playwright MCP、browser-use 及抖音 / 公众号 / X 特定项目；形成采集指挥中心、结果信封、能力矩阵、证据包、可见范围导出、快照差异、doctor 与发布包路线
+
+- 采集指挥中心 — `scripts/server.mjs`、`app/app.js`、`app/styles.css`、`scripts/chain-regression.mjs` — 账号页按运行中、待人工、待补采、到期、失败、冷却、完成等状态输出行动队列，展示覆盖率、失败原因、最近运行摘要、书签 / 脚本 / 主页入口和下一步动作；无覆盖率旧数据也进入待补采，`node --check`、`npm run test:chain` 16 项回归通过
+- 服务边界与更新白名单 — `scripts/server.mjs`、`scripts/chain-regression.mjs` — 静态路径用相对路径边界拒绝越界，请求体限制 2MB 并区分 400 / 413，`/api/update` 只允许页面可编辑字段，防止身份与内部运行态被覆盖；`node --check`、`npm run test:chain` 17 项回归通过
 
 ## 已验收
 
@@ -99,18 +120,22 @@ Current phase: implementation
 - P1 — 真实 Google Drive 同步目录尚未配置 — 用户 — 不阻塞本地 bridge 使用 — 用户在桥接页填写桌面同步目录
 - P1 — Codex / Claude 真实选题任务尚未运行，Grok / Muse 手动回流尚未验证 — 用户 — 不阻塞代码交付 — 用户各跑一次真实任务并记录手感
 - P2 — Cursor 的标准打开方式尚未确认 — 用户 — 可先复制任务目录手动打开 — 用户确认常用入口后再评估增强
+- P2 — Grok / Muse / Cursor 人工保存 `result.md` 时仍可能被写成半成品 — 实现 — 本机 Codex / Claude 已用 pending + 替换缓解 — 后续增加显式完成标记
+- P2 — 浏览器采集 token 在服务重启或 12 小时后失效，需要刷新页面重新复制书签 — 实现 — 可接受第一阶段手动操作 — 后续做按需刷新
+- P2 — `collectionRuns`、`rawSnapshots` 和 Agent `resultText` 没有保留上限 — 实现 — 单人本地短期可用 — 后续做归档或大文本外置
+- P2 — API 错误语义仍偏粗，部分不同失败都返回 400 — 实现 — 不影响单人使用 — 后续做 typed error
+- P2 — 浏览器采集空结果不落 collection run；Drive 云端任务素材隐私分级未做 — 实现 — 已有显式勾选兜底 — 后续分别补运行留痕和 `cloudSafe`
+- P2 — `data/backups/` 只保存在本机，尚未自动镜像到 Google Drive 或其他私人位置 — 用户 — 单机磁盘故障仍可能丢失数据 — 用户定期把备份复制到私人位置
 
 ## 下一步
 
-1. 用户在第一个小红书对标主页手动滚动到目标范围，点击账号页生成的采集书签 — 验证可见数量、链接和 Private Network Access 行为
-2. 用户用一条真实信号和一条真实热评各投一个文件到 `drops/` — 验证本地投递箱日常手感
-3. 用户打开 `http://127.0.0.1:5177` 的 Inbox — 分流第一批信号，至少挑 2 条拆解、2 条观察
-4. 用户给出三个优先主题 — 每个主题有一句话核心观点
-5. 用户后续逐步提供对标账号和链接 — 每个账号标注平台和期望采集方式
-6. 补齐 10 条真实对标信号并复核自动作者互动中位数和相对倍数 — 当前已完成 8 条
-7. 沉淀 20 条素材或热评并手动完成 3 次拆解 — 验证素材字段和拆解模板是否够用
-8. 逐步补充公开 RSS / 公开页面信息源 — 用真实 L2 信源验证自动调度的日常稳定性
-9. 配置真实 Google Drive 同步目录，并用一个真实选题跑一次 Codex 或 Claude 任务 — 验证任务包、运行、扫描和导入闭环
+1. 在账号页刷新采集指挥中心，用第一个小红书对标账号确认待补采状态、覆盖率、最近运行摘要和下一步动作 — 验收标准：用户能在页面直接判断下一步是否需要滚动补采
+2. 建立分层证据包标准并用一条高价值信号验证 — 验收标准：结构化索引、原始数据、原文或截图证据、媒体清单可互相关联，真实证据不进 Git
+3. 用户在第一个小红书对标主页手动滚动到目标范围，点击账号页生成的采集书签 — 验证可见数量、链接和 Private Network Access 行为
+4. 用户用一条真实信号和一条真实热评各投一个文件到 `drops/` — 验证本地投递箱日常手感
+5. 用户打开 `http://127.0.0.1:5177` 的 Inbox — 分流第一批信号，至少挑 2 条拆解、2 条观察
+6. 用户给出三个优先主题 — 每个主题有一句话核心观点
+7. 配置真实 Google Drive 同步目录，并用一个真实选题跑一次 Codex 或 Claude 任务 — 验证任务包、运行、扫描和导入闭环
 
 ## 恢复上下文
 
@@ -123,12 +148,13 @@ Current phase: implementation
 - 本地输入流程：`docs/local-input-workflow.md`
 - North Star 路线图：`docs/north-star-roadmap.md`
 - 小红书采集调研：`docs/xhs-collection-research.md`
+- 外部自动化项目调研：`docs/external-automation-research.md`
 - Agent 桥接：`docs/agent-bridge.md`
 - 待办清单：`TODO.md`
 - 导入模板：`data/import-template.json`
 - 决策文件：`decisions.md`
-- 验证命令：`node --check scripts/server.mjs`、`node --check app/app.js`、`npm run collect`
-- 已知坑：中文文本必须用 Node UTF-8 或显式 UTF-8 安全方式读取；Windows OCR 需要通过 `powershell.exe -File ...batch-ocr.ps1` 运行；新克隆没有真实主数据，需要从私人备份恢复或重新导入
+- 验证命令：`node --check scripts/server.mjs`、`node --check app/app.js`、`npm run test:chain`、`npm run collect`
+- 已知坑：中文文本必须用 Node UTF-8 或显式 UTF-8 安全方式读取；Windows OCR 需要通过 `powershell.exe -File ...batch-ocr.ps1` 运行；新克隆没有真实主数据，需要从私人备份恢复或重新导入；真实备份不进入 Git
 
 ## 最近更新
 
@@ -144,3 +170,12 @@ Current phase: implementation
 - 2026-10-19 12:47 — 增加快速粘贴、公开页面自动解析、四层身份去重和登录常驻任务脚本 — 自动进料从文件投递扩展到粘贴和公开页面，服务可按用户选择保持常驻
 - 2026-10-19 13:35 — 增加正文全文、图片描述和数据口径候选抽取 — Inbox 从标题摘要升级为可展开拆解线索，机器抽取保持候选定位，发布前仍需人工核对
 - 2026-10-19 13:54 — 增加 Agent 桥接、Google Drive 桌面同步镜像和结果回流 — Grok / Muse / Codex / Claude / Cursor 共享任务包协议，Agent 输出作为候选进入素材库或生产稿版本
+- 2026-10-19 15:07 — 完成端到端链路清理、4 视角对抗审查和 14 项回归 — 修复素材身份分裂、定时器背压、Agent 重复启动和半成品结果风险；补齐链路文档与交接状态
+- 2026-10-19 15:22 — 确认最终形态为 Windows 单用户本地桌面应用 — 当前 localhost 壳继续跑通真实流程，桌面化在第一条口播链路后评估，不做多租户 SaaS
+- 2026-10-19 15:33 — 补齐 signal / material / topic 页面编辑闭环 — 人工判断、素材价值、引用注意和选题核心内容不再依赖 API 或 JSON；链路回归扩展编辑表单冒烟
+- 2026-10-19 15:55 — 实现本地备份与显式恢复 — 主数据变更前自动保存上一版，页面可手动备份和恢复，回归扩展到 15 项且全部使用临时目录
+- 2026-10-19 16:17 — 增加对标账号快速登记、可见范围覆盖率留痕和重复登记保护 — 采集边界保持人工滚动后显式触发，回归扩展到 16 项且全部通过
+- 2026-10-19 16:29 — 完成外部自动化项目调研并确定下一阶段控制面优先级 — 新增采集指挥中心、统一结果信封、平台能力矩阵、快照差异、doctor 和发布包路线
+- 2026-10-19 16:40 — 补充收藏归档、媒体下载、Agent 浏览器和平台特定项目调研 — 新增分层证据包、幂等媒体归档和可见范围导出路线；TODO 下一个行动编号已修正
+- 2026-10-19 17:26 — 实现采集指挥中心并纳入端到端回归 — 账号页现在能按状态优先级输出每个源的下一次动作、覆盖率、失败原因和最近运行摘要
+- 2026-10-19 18:09 — 完成代码质量复核并加固服务边界 — 静态路径、请求体上限、直接生产动作和更新字段白名单纳入回归；5177 服务已重启并健康检查通过
