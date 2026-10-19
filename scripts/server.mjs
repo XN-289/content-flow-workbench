@@ -485,10 +485,13 @@ function parseFeed(xml) {
 
   return itemBlocks.map((block) => {
     const link = pick(block, "link") || (block.match(/<link\b[^>]*href=["']([^"']+)["']/i)?.[1] || "");
+    const contentText = pick(block, "content:encoded") || pick(block, "description") || pick(block, "summary");
     return {
       title: pick(block, "title"),
       link,
-      publishedAt: pick(block, "pubDate") || pick(block, "published") || pick(block, "updated")
+      publishedAt: pick(block, "pubDate") || pick(block, "published") || pick(block, "updated"),
+      contentText,
+      dataPointCandidates: extractDataPointCandidates([contentText])
     };
   }).filter((item) => item.link);
 }
@@ -496,6 +499,8 @@ function parseFeed(xml) {
 function decodeHtmlText(value = "") {
   return String(value || "")
     .replace(/&nbsp;/gi, " ")
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
@@ -512,6 +517,82 @@ function htmlAttribute(tag = "", name = "") {
 
 function htmlTagText(html, tag) {
   return decodeHtmlText(html.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"))?.[1] || "");
+}
+
+function readableHtmlText(fragment = "") {
+  const withoutInactiveBlocks = String(fragment || "")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(script|style|noscript|template|svg|iframe|nav|header|footer|aside|form)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
+  const text = decodeHtmlText(
+    withoutInactiveBlocks
+      .replace(/<br\b[^>]*>/gi, "\n")
+      .replace(/<\/(?:p|div|section|article|li|h[1-6]|blockquote|figcaption)>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+  );
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 100000);
+}
+
+function extractArticleText(html) {
+  const body = html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] || html;
+  const blocks = [
+    ...body.matchAll(/<article\b[^>]*>[\s\S]*?<\/article>/gi),
+    ...body.matchAll(/<main\b[^>]*>[\s\S]*?<\/main>/gi)
+  ].map((match) => readableHtmlText(match[0]));
+  const preferred = blocks.filter((text) => text.length >= 120).sort((a, b) => b.length - a.length)[0];
+  const pageText = readableHtmlText(body);
+  return preferred && preferred.length >= 120 ? preferred : pageText;
+}
+
+function addImageDescription(images, url, description) {
+  const imageUrl = normalizeUrl(url);
+  const text = decodeHtmlText(String(description || "")).replace(/\s+/g, " ").trim();
+  if (!imageUrl || text.length < 2 || text.length > 300 || /^(?:image|photo|img|picture|logo|icon)$/i.test(text)) return;
+  const key = `${imageUrl}||${text.toLowerCase()}`;
+  if (images.has(key)) return;
+  images.set(key, { url: imageUrl, description: text });
+}
+
+function extractImageDescriptions(html, pageUrl, meta = new Map()) {
+  const images = new Map();
+  addImageDescription(images, absoluteUrl(meta.get("og:image") || meta.get("twitter:image"), pageUrl), meta.get("og:image:alt") || meta.get("twitter:image:alt"));
+
+  for (const figure of html.match(/<figure\b[^>]*>[\s\S]*?<\/figure>/gi) || []) {
+    const imageTag = figure.match(/<img\b[^>]*>/i)?.[0] || "";
+    const imageUrl = absoluteUrl(htmlAttribute(imageTag, "src") || htmlAttribute(imageTag, "data-src"), pageUrl);
+    const caption = figure.match(/<figcaption\b[^>]*>([\s\S]*?)<\/figcaption>/i)?.[1] || "";
+    addImageDescription(images, imageUrl, readableHtmlText(caption));
+  }
+
+  for (const tag of html.match(/<img\b[^>]*>/gi) || []) {
+    const imageUrl = absoluteUrl(htmlAttribute(tag, "src") || htmlAttribute(tag, "data-src"), pageUrl);
+    const description = htmlAttribute(tag, "alt") || htmlAttribute(tag, "title") || htmlAttribute(tag, "aria-label");
+    addImageDescription(images, imageUrl, description);
+  }
+  return [...images.values()].slice(0, 20);
+}
+
+function extractDataPointCandidates(texts = []) {
+  const candidates = new Map();
+  const strongNumber = /(?:\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*(?:%|％|pp|个百分点|万|亿|千元|万元|亿元|美元|元|倍|[xX])/;
+  const dataWord = /(增长|下降|上涨|下跌|同比|环比|超过|达到|平均|约|占比|渗透率|收入|利润|用户|流量|成本|毛利|市场规模|中位数)/;
+  for (const source of texts) {
+    const text = String(source || "").trim();
+    if (!text) continue;
+    for (const sentence of text.match(/[^\n。！？!?；;]+[。！？!?；;]?/g) || []) {
+      const value = sentence.replace(/\s+/g, " ").trim();
+      const isCandidate = (strongNumber.test(value) && value.length <= 400) || (dataWord.test(value) && /\d/.test(value) && value.length <= 400);
+      if (!isCandidate) continue;
+      const key = value.toLowerCase();
+      if (!candidates.has(key)) candidates.set(key, value);
+      if (candidates.size >= 30) return [...candidates.values()];
+    }
+  }
+  return [...candidates.values()];
 }
 
 function collectJsonLdArticles(html) {
@@ -567,6 +648,10 @@ function parsePublicPage(html, pageUrl) {
     || "";
   const publishedAt = meta.get("article:published_time") || meta.get("date") || article.datePublished || "";
   const pageType = String(meta.get("og:type") || "").toLowerCase();
+  const contentText = readableHtmlText(article.articleBody || "") || extractArticleText(html);
+  const description = meta.get("description") || meta.get("og:description") || "";
+  const imageDescriptions = extractImageDescriptions(html, pageUrl, meta);
+  const dataPointCandidates = extractDataPointCandidates([article.articleBody, contentText, description]);
 
   if (title && (pageType.includes("article") || publishedAt || article["@type"])) {
     return [{
@@ -574,7 +659,10 @@ function parsePublicPage(html, pageUrl) {
       url: absoluteUrl(meta.get("og:url") || canonicalUrl, pageUrl),
       author,
       publishedAt,
-      description: meta.get("description") || meta.get("og:description") || ""
+      description,
+      contentText,
+      imageDescriptions,
+      dataPointCandidates
     }];
   }
 
@@ -651,7 +739,9 @@ async function runCollection(state, sourceId, trigger = "manual") {
           author: source.account || source.name,
           title: item.title,
           url: item.link,
-          publishedAt: item.publishedAt
+          publishedAt: item.publishedAt,
+          contentText: item.contentText || "",
+          dataPointCandidates: item.dataPointCandidates || []
         };
         if (hasSignal(state, candidate)) {
           run.duplicates += 1;
@@ -673,6 +763,9 @@ async function runCollection(state, sourceId, trigger = "manual") {
           seen: false,
           disposition: "inbox",
           note: "RSS 采集候选，互动数据待确认",
+          contentText: item.contentText || "",
+          imageDescriptions: [],
+          dataPointCandidates: item.dataPointCandidates || [],
           createdAt: now(),
           updatedAt: now()
         });
@@ -705,7 +798,10 @@ async function runCollection(state, sourceId, trigger = "manual") {
           author: item.author || source.account || source.name,
           title: item.title,
           url: item.url,
-          publishedAt: item.publishedAt
+          publishedAt: item.publishedAt,
+          contentText: item.contentText || "",
+          imageDescriptions: item.imageDescriptions || [],
+          dataPointCandidates: item.dataPointCandidates || []
         };
         if (hasSignal(state, candidate)) {
           run.duplicates += 1;
@@ -724,6 +820,9 @@ async function runCollection(state, sourceId, trigger = "manual") {
           seen: false,
           disposition: "inbox",
           note: item.description || "公开页面自动解析",
+          contentText: item.contentText || "",
+          imageDescriptions: item.imageDescriptions || [],
+          dataPointCandidates: item.dataPointCandidates || [],
           createdAt: now(),
           updatedAt: now()
         });
@@ -987,7 +1086,10 @@ function parseDropFile(fileName, text) {
         author: metadata.author || "",
         platform: metadata.platform || "",
         publishedAt: metadata.publishedat || "",
-        note: body || metadata.note || ""
+        note: body ? "本地文本信号，正文已保存" : metadata.note || "",
+        contentText: body,
+        imageDescriptions: [],
+        dataPointCandidates: extractDataPointCandidates([body])
       }],
       materials: []
     };
@@ -1072,7 +1174,10 @@ function parseLooseCapture(state, text) {
         url: primaryUrl,
         engagement: parseCount(engagementValue),
         publishedAt: metadata.publishedat || metadata.date || "",
-        note: noteLines.join("\n") || metadata.note || "快速粘贴自动解析"
+        note: noteLines.length ? "快速粘贴文本，正文已保存" : metadata.note || "快速粘贴自动解析",
+        contentText: noteLines.join("\n"),
+        imageDescriptions: [],
+        dataPointCandidates: extractDataPointCandidates([noteLines.join("\n")])
       }]
     : [];
 
@@ -1138,6 +1243,23 @@ function normalizeDropRecords({ state, signals = [], materials = [], context = {
       seen: false,
       disposition: "inbox",
       note: record.note || "本地投递箱自动入库",
+      contentText: String(record.contentText || "").slice(0, 100000),
+      imageDescriptions: Array.isArray(record.imageDescriptions)
+        ? record.imageDescriptions
+          .filter((item) => item && typeof item === "object")
+          .map((item) => ({
+            url: normalizeUrl(item.url) || "",
+            description: String(item.description || "").replace(/\s+/g, " ").trim().slice(0, 300)
+          }))
+          .filter((item) => item.url && item.description)
+          .slice(0, 20)
+        : [],
+      dataPointCandidates: Array.isArray(record.dataPointCandidates)
+        ? record.dataPointCandidates
+          .map((item) => String(item || "").replace(/\s+/g, " ").trim().slice(0, 400))
+          .filter(Boolean)
+          .slice(0, 30)
+        : [],
       createdAt: record.createdAt || now(),
       updatedAt: now()
     });

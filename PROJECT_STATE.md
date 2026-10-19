@@ -1,11 +1,11 @@
 # PROJECT_STATE
 
-Updated: 2026-10-19 12:47
+Updated: 2026-10-19 13:35
 Current phase: implementation
 
 ## 一句话现状
 
-已完成 Park 原型分析、North Star 路线图和第一版本地 MVP：工作台可通过 `npm start` 在本机运行，包含今日、账号、Inbox、素材、选题、生产、发布、复盘和采集运行九个视图；服务端已内置轻量自动调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面自动解析、多层身份去重、自动去重分级和每日晨报，并提供当前用户 Windows 登录常驻任务脚本。第一个真实小红书对标账号已入库，8 条笔记进入 Inbox，作者互动中位数和信号相对倍数已支持自动计算。仓库已补齐 README、TODO 和交接上下文，真实账号明细和素材只保存在本地主数据。
+已完成 Park 原型分析、North Star 路线图和第一版本地 MVP：工作台可通过 `npm start` 在本机运行，包含今日、账号、Inbox、素材、选题、生产、发布、复盘和采集运行九个视图；服务端已内置轻量自动调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面自动解析、正文全文 / 图片描述 / 数据口径候选抽取、多层身份去重、自动去重分级和每日晨报，并提供当前用户 Windows 登录常驻任务脚本。第一个真实小红书对标账号已入库，8 条笔记进入 Inbox，作者互动中位数和信号相对倍数已支持自动计算。仓库已补齐 README、TODO 和交接上下文，真实账号明细和素材只保存在本地主数据。
 
 ## 已接受事实
 
@@ -32,6 +32,7 @@ Current phase: implementation
 - 快速粘贴已在临时数据验证：一次输入发现 3 条记录，新增 1 条信号和 2 条热评素材；重复投递新增 0 — 本轮 `tmp/automation-live-test-3` 命令结果，目录不入 Git
 - 公开页面自动解析已在临时数据验证：mock 页面自动生成 1 条公众号信号，第二次强制采集 `found 1 / created 0` — 本轮临时测试命令结果
 - 小红书同一内容 ID 在 `explore/:id` 与 `discovery/item/:id` 两种路径下已被识别为重复；多层身份去重修复后信号数量不再因同一条记录命中多个 key 而膨胀 — 本轮临时测试命令结果
+- 正文 / 图片 / 数据候选抽取已在临时服务验证：快速粘贴、公开页面和 RSS 均保存正文；公开页面提取图片描述；三类入口均生成数据口径候选；重复采集 `created 0 / duplicates 1` — 本轮 `tmp/extraction-live-test` 命令结果，测试数据不入 Git
 
 ## 决策索引
 
@@ -55,6 +56,7 @@ Current phase: implementation
 - 2026-10-19 — 自动化第二层采用本地投递箱和晨报 — `decisions.md`
 - 2026-10-19 — 自动进料采用快速粘贴与多层身份去重 — `decisions.md`
 - 2026-10-19 — 本地常驻采用当前用户登录任务 — `decisions.md`
+- 2026-10-19 — 抽取结果只作为候选，不当作已核实事实 — `decisions.md`
 
 ## 已实现
 
@@ -74,6 +76,7 @@ Current phase: implementation
 - 本地投递箱与自动晨报 — `scripts/server.mjs`、`scripts/collect-all.mjs`、`app/app.js`、`drops/README.md`、`README.md` — 支持 JSON / Markdown / TXT 自动解析、规范化去重、素材热评入库、成功 / 失败归档、互动基线分级、高潜力信号、待人工账号、重试账号和下一步动作汇总；`npm run collect` 先清投递箱再跑到期任务，临时数据完整路径和重复路径验证通过
 - 快速粘贴与多层身份去重 — `scripts/server.mjs`、`app/app.js` — 支持直接粘贴 JSON / 普通文本，自动识别 URL、标题、平台、账号、点赞数和 `热评：` / `@评论者：` 素材；信号身份覆盖规范化 URL、平台内容 ID、平台 + 作者 + 标题、平台 + 标题 + 发布时间；临时数据验证通过
 - 公开页面自动解析 — `scripts/server.mjs` — 支持 Open Graph、JSON-LD Article、canonical、作者、发布时间、描述和同站链接提取，并自动生成 Inbox 信号；mock 页面重复采集验证通过
+- 正文与线索抽取 — `scripts/server.mjs`、`app/app.js`、`app/styles.css`、`data/import-template.json` — 支持 RSS 正文、公开页面正文、图片描述、数据口径候选、快速粘贴 / 本地文本正文保存；Inbox 展示拆解线索并可转数据素材；临时服务接口测试通过
 - Windows 登录常驻任务 — `scripts/install-startup-task.ps1`、`package.json` — `npm run setup-task` 为当前用户安装并启动本地服务任务，`npm run remove-task` 移除；PowerShell 语法检查通过，尚未在用户机器注册
 
 ## 已验收
@@ -130,3 +133,4 @@ Current phase: implementation
 - 2026-10-19 11:29 — 参考 AIHOT 落地轻量自动调度 — `npm start` 即可获得到期检查、失败退避、并发保护、状态可见和手动 / 强制入口，不引入数据库和队列
 - 2026-10-19 12:25 — 增加本地投递箱和自动晨报 — 采集后自动解析、去重、分级、归档和晨报汇总，受限平台仍不使用登录态或私有接口
 - 2026-10-19 12:47 — 增加快速粘贴、公开页面自动解析、四层身份去重和登录常驻任务脚本 — 自动进料从文件投递扩展到粘贴和公开页面，服务可按用户选择保持常驻
+- 2026-10-19 13:35 — 增加正文全文、图片描述和数据口径候选抽取 — Inbox 从标题摘要升级为可展开拆解线索，机器抽取保持候选定位，发布前仍需人工核对

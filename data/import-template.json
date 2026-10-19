@@ -33,7 +33,15 @@
       "relativeMultiple": null,
       "seen": false,
       "disposition": "inbox | discard | watch | dissect | material | topic | produce",
-      "note": ""
+      "note": "",
+      "contentText": "",
+      "imageDescriptions": [
+        {
+          "url": "",
+          "description": ""
+        }
+      ],
+      "dataPointCandidates": []
     }
   ],
   "materials": [

@@ -491,6 +491,39 @@ textarea {
   font-weight: 650;
 }
 
+.extract-block + .extract-block {
+  margin-top: 10px;
+}
+
+.extract-label {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.extract-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #394037;
+  font-size: 12px;
+}
+
+.extract-list li + li {
+  margin-top: 4px;
+}
+
+.extract-text {
+  max-height: 280px;
+  margin: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #394037;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .empty {
   padding: 24px;
   border: 1px dashed var(--line);

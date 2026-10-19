@@ -573,6 +573,9 @@ function renderInbox() {
         const medianIsAuto = Number(source?.engagementSampleCount || 0) >= 3;
         const median = signal.authorMedianEngagement;
         const multiple = signal.relativeMultiple;
+        const contentText = String(signal.contentText || "").trim();
+        const imageDescriptions = Array.isArray(signal.imageDescriptions) ? signal.imageDescriptions : [];
+        const dataPoints = Array.isArray(signal.dataPointCandidates) ? signal.dataPointCandidates : [];
         return `
           <article class="item-card" data-signal-card="${escapeHtml(signal.id)}">
             <div class="item-head">
@@ -591,8 +594,34 @@ function renderInbox() {
               ${median !== null && median !== undefined ? tag(`中位数 ${median}`) : ""}
               ${multiple !== null && multiple !== undefined ? tag(`${multiple}x`, "accent") : ""}
               ${source ? tag(`样本 ${source.engagementSampleCount || 0}`) : ""}
+              ${contentText ? tag(`正文 ${contentText.length} 字`) : ""}
+              ${imageDescriptions.length ? tag(`图片描述 ${imageDescriptions.length}`) : ""}
+              ${dataPoints.length ? tag(`数据口径 ${dataPoints.length}`, "warn") : ""}
             </div>
             ${signal.note ? `<p class="item-note">${escapeHtml(signal.note)}</p>` : ""}
+            ${(contentText || imageDescriptions.length || dataPoints.length) ? `
+              <details class="details">
+                <summary>拆解线索</summary>
+                ${dataPoints.length ? `
+                  <div class="extract-block">
+                    <p class="extract-label">数据口径候选</p>
+                    <ul class="extract-list">${dataPoints.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+                  </div>
+                ` : ""}
+                ${imageDescriptions.length ? `
+                  <div class="extract-block">
+                    <p class="extract-label">图片描述</p>
+                    <ul class="extract-list">${imageDescriptions.map((item) => `<li>${escapeHtml(item.description)}</li>`).join("")}</ul>
+                  </div>
+                ` : ""}
+                ${contentText ? `
+                  <div class="extract-block">
+                    <p class="extract-label">正文全文</p>
+                    <p class="extract-text">${escapeHtml(contentText)}</p>
+                  </div>
+                ` : ""}
+              </details>
+            ` : ""}
             <div class="inline-grid">
               <input name="engagement" type="number" min="0" placeholder="互动" value="${signal.engagement ?? ""}">
               <input name="authorMedianEngagement" type="number" min="0" placeholder="中位数" value="${signal.authorMedianEngagement ?? ""}" ${medianIsAuto ? "readonly title=\"自动计算\"" : ""}>
@@ -897,15 +926,21 @@ async function updateRecord(type, recordId, patch) {
 async function signalToMaterial(signalId) {
   const signal = state.signals.find((item) => item.id === signalId);
   if (!signal) return;
+  const dataPoint = Array.isArray(signal.dataPointCandidates) ? signal.dataPointCandidates[0] : "";
+  const excerpt = dataPoint
+    || String(signal.contentText || "").trim().slice(0, 600)
+    || signal.title
+    || signal.note
+    || signal.url;
   await saveRecord("materials", {
     sourceUrl: signal.url,
     platform: signal.platform,
     author: signal.author,
-    type: "lead",
-    excerpt: signal.title || signal.note || signal.url,
+    type: dataPoint ? "data" : "lead",
+    excerpt,
     whyValuable: "待判断",
     possibleUse: "evidence",
-    citationNote: "来自 Inbox 转入，引用前核对上下文",
+    citationNote: dataPoint ? "自动抽取的数据口径候选，发布前必须回原文核对" : "来自 Inbox 转入，引用前核对上下文",
     topicIds: []
   });
   await updateRecord("signals", signalId, { disposition: "material", seen: true });
