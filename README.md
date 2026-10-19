@@ -16,10 +16,16 @@ npm start
 
 ## 每日节奏
 
-1. 08:40 执行采集，或在服务启动后运行：
+1. 保持工作台服务运行，默认 08:40 自动检查到期信源。也可以手动执行：
 
    ```powershell
    npm run collect
+   ```
+
+   只检查到期任务；如需跳过档期强制检查全部：
+
+   ```powershell
+   npm run collect -- --force
    ```
 
 2. 09:00 打开今日页，处理 Inbox。
@@ -32,6 +38,17 @@ npm start
 - `public-page`：保存公开页面原始快照，暂不解析成信号。
 - `browser-assisted`：用户手动打开页面并滚动到目标范围后，通过粘贴可见列表 JSON 或采集书签读取当前已加载内容。脚本不自动滚动、不调用平台接口、不绕过登录或验证码。
 - `manual`、`platform-export`：记录 blocked 状态和下一步人工动作，不伪装成自动成功。
+
+## 自动化调度
+
+- `npm start` 后服务端每 60 秒检查一次到期任务，不需要 Windows 任务计划。
+- 每日 / 每周任务按 `settings.collectionTime` 排程；按需和仅研究任务不自动执行。
+- 失败使用 5 分钟起步的指数退避，最长 6 小时；成功后失败计数清零。
+- 同一账号不会并发采集。
+- 账号页和采集页会显示下次运行时间、待人工、失败次数和最后错误。
+- 页面可暂停 / 恢复自动化；也可以用环境变量 `AUTOMATION_ENABLED=false` 强制关闭。
+
+设计参考与边界见 [docs/automation-research.md](docs/automation-research.md)。
 
 ## 数据与隐私
 
@@ -57,6 +74,7 @@ npm start
 | North Star 生产线 | [docs/north-star-roadmap.md](docs/north-star-roadmap.md) |
 | Park 原型分析 | [docs/park-prototype-analysis.md](docs/park-prototype-analysis.md) |
 | 小红书采集边界 | [docs/xhs-collection-research.md](docs/xhs-collection-research.md) |
+| 自动化调度设计 | [docs/automation-research.md](docs/automation-research.md) |
 | 日常输入流程 | [docs/local-input-workflow.md](docs/local-input-workflow.md) |
 | 决策记录 | [decisions.md](decisions.md) |
 

@@ -1,11 +1,11 @@
 # PROJECT_STATE
 
-Updated: 2026-10-19 11:11
+Updated: 2026-10-19 11:29
 Current phase: implementation
 
 ## 一句话现状
 
-已完成 Park 原型分析、North Star 路线图和第一版本地 MVP：工作台可通过 `npm start` 在本机运行，包含今日、账号、Inbox、素材、选题、生产、发布、复盘和采集运行九个视图；第一个真实小红书对标账号已入库，8 条笔记进入 Inbox，作者互动中位数和信号相对倍数已支持自动计算。仓库已补齐 README、TODO 和交接上下文，真实账号明细和素材只保存在本地主数据。
+已完成 Park 原型分析、North Star 路线图和第一版本地 MVP：工作台可通过 `npm start` 在本机运行，包含今日、账号、Inbox、素材、选题、生产、发布、复盘和采集运行九个视图；服务端已内置轻量自动调度，支持到期采集、失败退避、并发保护、状态可见和自动化开关。第一个真实小红书对标账号已入库，8 条笔记进入 Inbox，作者互动中位数和信号相对倍数已支持自动计算。仓库已补齐 README、TODO 和交接上下文，真实账号明细和素材只保存在本地主数据。
 
 ## 已接受事实
 
@@ -27,6 +27,7 @@ Current phase: implementation
 - 第一个真实对标账号为小红书账号；昵称、主页、笔记链接和采集参数只保存在 `data/workbench.json`
 - 浏览器辅助采集第一批可见笔记 8 条已入库，最高互动 `5.9万` 已解析为 `59000` — `data/workbench.json`
 - 第一轮只有 8 条的原因是无障碍树后续链接被截断；新采集书签改为读取页面状态中的 `noteId + xsecToken`，但只能覆盖用户手动滚动后已加载的数据 — `docs/xhs-collection-research.md`
+- AIHOT 的可吸收模式是统一 adapter、独立调度、下次运行时间、失败退避、singleton 运行和健康状态可见；其 Postgres、pg-boss、Docker 和三进程架构不进入本项目 — `docs/automation-research.md`
 
 ## 决策索引
 
@@ -46,6 +47,7 @@ Current phase: implementation
 - 2026-10-18 — 用 TODO 驱动阶段交付 — `decisions.md`
 - 2026-10-18 — 浏览器辅助采集先落成半自动闭环 — `decisions.md`
 - 2026-10-18 — 小红书采集采用手动可见状态提取 — `decisions.md`
+- 2026-10-19 — 自动调度采用 AIHOT-inspired 轻量本地实现 — `decisions.md`
 
 ## 已实现
 
@@ -61,6 +63,7 @@ Current phase: implementation
 - 浏览器辅助采集闭环 — `scripts/server.mjs`、`app/app.js` — 支持账号页粘贴可见列表 JSON，保存原始快照、URL 去重、解析 `万 / 亿 / k / +` 互动数并导入 Inbox
 - 小红书采集调研与书签 — `docs/xhs-collection-research.md`、`scripts/server.mjs`、`app/app.js` — 对比 XHS-Downloader、social-media-copilot、逆向方案和 Beav；实现账号页生成采集书签、受限 CORS 和页面状态提取，语法、预检、入库与去重已在临时数据文件验证
 - 作者互动基线 — `scripts/server.mjs`、`app/app.js`、`app/styles.css` — 样本数不低于 3 时自动计算作者中位数和相对倍数，Inbox 按信号强度排序并展示样本量；规范化 URL、UTM 参数、query 顺序去重和空互动保存在临时数据与本地页面验证通过
+- 轻量自动调度器 — `scripts/server.mjs`、`scripts/collect-all.mjs`、`app/app.js`、`docs/automation-research.md` — 服务端每分钟检查到期信源；支持每日 / 每周档期、失败指数退避、同源并发保护、待人工提醒、强制检查、自动化暂停 / 恢复和运行状态可视化，不新增依赖
 
 ## 已验收
 
@@ -84,7 +87,7 @@ Current phase: implementation
 4. 用户后续逐步提供对标账号和链接 — 每个账号标注平台和期望采集方式
 5. 补齐 10 条真实对标信号并复核自动作者互动中位数和相对倍数 — 当前已完成 8 条
 6. 沉淀 20 条素材或热评并手动完成 3 次拆解 — 验证素材字段和拆解模板是否够用
-7. 评估是否为 Windows 任务计划配置每日 08:40 执行 `npm run collect` — 浏览器辅助账号仍需人工打开页面确认可见列表
+7. 逐步补充公开 RSS / 公开页面信息源 — 用真实 L2 信源验证自动调度的日常稳定性
 
 ## 恢复上下文
 
@@ -111,3 +114,4 @@ Current phase: implementation
 - 2026-10-18 19:24 — 完成小红书采集开源方案调研并落地安全采集书签 — 明确 8 条截断原因，实现页面状态提取、受限 CORS、语法与临时数据验证
 - 2026-10-18 23:19 — 完成发布前安全检查、Git 初始化和交接文档升级 — 真实主数据排除在 Git 外，README / TODO / PROJECT_STATE 可支撑新机器恢复
 - 2026-10-19 11:11 — 实现作者互动中位数、相对倍数、Inbox 强度排序和规范化 URL 去重 — 信号优先级判断从手工记录升级为自动计算，完整四层去重仍待做
+- 2026-10-19 11:29 — 参考 AIHOT 落地轻量自动调度 — `npm start` 即可获得到期检查、失败退避、并发保护、状态可见和手动 / 强制入口，不引入数据库和队列

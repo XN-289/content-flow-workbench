@@ -9,11 +9,16 @@ const appDir = path.join(root, "app");
 const dataDir = path.join(root, "data");
 const dataFile = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : path.join(dataDir, "workbench.json");
 const port = Number(process.env.PORT || 5177);
+const automationTickMs = Math.max(1000, Number(process.env.AUTOMATION_TICK_MS || 60000));
+const automaticMethods = new Set(["public-rss", "public-page"]);
+const runningSourceIds = new Set();
+let automationTickRunning = false;
 
 const emptyState = () => ({
   version: 1,
   settings: {
     collectionTime: "08:40",
+    automationEnabled: true,
     inboxTime: "09:00",
     inboxDailyLimit: 10,
     streakDefinition: ""
@@ -44,6 +49,7 @@ async function readState() {
     const parsed = JSON.parse(text);
     const state = { ...emptyState(), ...parsed, settings: { ...emptyState().settings, ...(parsed.settings || {}) } };
     refreshEngagementMetrics(state);
+    prepareAutomationState(state);
     return state;
   } catch (error) {
     if (error.code === "ENOENT") return emptyState();
@@ -64,6 +70,63 @@ function id(prefix) {
 
 function now() {
   return new Date().toISOString();
+}
+
+function collectionSlot(value, from = new Date()) {
+  const [hours, minutes] = String(value || "08:40").split(":").map(Number);
+  const slot = new Date(from.getFullYear(), from.getMonth(), from.getDate(), hours || 0, minutes || 0, 0, 0);
+  if (slot.getTime() <= from.getTime()) slot.setDate(slot.getDate() + 1);
+  return slot;
+}
+
+function nextCollectionRun(source, collectionTime, from = new Date()) {
+  const intervalDays = source.checkFrequency === "weekly" ? 7 : 1;
+  const slot = collectionSlot(collectionTime || "08:40", from);
+  slot.setDate(slot.getDate() + intervalDays - 1);
+  return slot.toISOString();
+}
+
+function failureDelay(failureCount) {
+  const fiveMinutes = 5 * 60 * 1000;
+  const sixHours = 6 * 60 * 60 * 1000;
+  return Math.min(fiveMinutes * 2 ** Math.max(0, failureCount - 1), sixHours);
+}
+
+function isScheduledSource(source) {
+  return source.enabled !== false
+    && source.checkFrequency !== "on-demand"
+    && source.collectionMethod !== "research-only";
+}
+
+function prepareAutomationState(state) {
+  for (const source of state.sources || []) {
+    source.failureCount = Number(source.failureCount || 0);
+    if (!isScheduledSource(source)) {
+      source.nextRunAt = source.nextRunAt || "";
+      source.automationStatus = source.enabled === false
+        ? "disabled"
+        : source.checkFrequency === "on-demand"
+          ? "on-demand"
+          : "research-only";
+      continue;
+    }
+
+    if (!source.nextRunAt) {
+      source.nextRunAt = collectionSlot(state.settings.collectionTime).toISOString();
+    }
+    if (source.automationStatus !== "retrying") {
+      source.automationStatus = automaticMethods.has(source.collectionMethod) ? "scheduled" : "manual-required";
+    }
+  }
+}
+
+function isDue(source, timestamp = Date.now()) {
+  return isScheduledSource(source) && Boolean(source.nextRunAt) && new Date(source.nextRunAt).getTime() <= timestamp;
+}
+
+function automationEnabled(state) {
+  const envDisabled = ["false", "0", "off"].includes(String(process.env.AUTOMATION_ENABLED || "").toLowerCase());
+  return !envDisabled && state.settings.automationEnabled !== false;
 }
 
 function corsHeaders(request) {
@@ -276,14 +339,16 @@ function parseFeed(xml) {
   }).filter((item) => item.link);
 }
 
-async function runCollection(state, sourceId) {
+async function runCollection(state, sourceId, trigger = "manual") {
   const source = state.sources.find((item) => item.id === sourceId);
   if (!source) throw new Error("source not found");
+  const scheduledRun = trigger === "automatic" || trigger === "force";
 
   const run = {
     id: id("run"),
     sourceId: source.id,
     status: "running",
+    trigger,
     startedAt: now(),
     finishedAt: "",
     found: 0,
@@ -292,6 +357,9 @@ async function runCollection(state, sourceId) {
     nextAction: ""
   };
   state.collectionRuns.unshift(run);
+  source.automationStatus = isScheduledSource(source)
+    ? (automaticMethods.has(source.collectionMethod) ? "running" : "manual-required")
+    : "on-demand";
 
   try {
     if (source.collectionMethod === "public-rss") {
@@ -376,9 +444,90 @@ async function runCollection(state, sourceId) {
     run.finishedAt = now();
     source.lastRunStatus = run.status;
     source.lastRunAt = run.finishedAt;
+    source.lastRunTrigger = trigger;
+    source.lastCollectionError = run.status === "failed" ? run.failureReason : "";
+
+    if (scheduledRun && isScheduledSource(source)) {
+      const finishedAt = new Date(run.finishedAt);
+      if (run.status === "failed") {
+        source.failureCount = Number(source.failureCount || 0) + 1;
+        source.nextRunAt = new Date(finishedAt.getTime() + failureDelay(source.failureCount)).toISOString();
+        source.automationStatus = "retrying";
+      } else {
+        source.failureCount = 0;
+        source.lastAutomaticRunAt = run.finishedAt;
+        source.nextRunAt = nextCollectionRun(source, state.settings.collectionTime, finishedAt);
+        source.automationStatus = run.status === "blocked" ? "manual-required" : "scheduled";
+      }
+    }
   }
 
   return run;
+}
+
+async function collectWithLock(state, sourceId, trigger = "manual") {
+  if (runningSourceIds.has(sourceId)) return null;
+  runningSourceIds.add(sourceId);
+  try {
+    return await runCollection(state, sourceId, trigger);
+  } finally {
+    runningSourceIds.delete(sourceId);
+  }
+}
+
+async function runAutomationTick(force = false) {
+  if (automationTickRunning) {
+    return { ok: true, skipped: true, reason: "another automation tick is running" };
+  }
+  automationTickRunning = true;
+
+  try {
+    const state = await readState();
+    if (!automationEnabled(state)) {
+      return { ok: true, skipped: true, reason: "automation is disabled" };
+    }
+
+    const candidates = state.sources.filter((source) => (force ? isScheduledSource(source) : isDue(source)));
+    const results = [];
+    for (const source of candidates) {
+      if (runningSourceIds.has(source.id)) {
+        results.push({ sourceId: source.id, source: source.name || source.account || source.id, status: "skipped", reason: "already running" });
+        continue;
+      }
+
+      const run = await collectWithLock(state, source.id, force ? "force" : "automatic");
+      if (run) {
+        results.push({
+          sourceId: source.id,
+          source: source.name || source.account || source.id,
+          status: run.status,
+          found: run.found,
+          created: run.created,
+          failureReason: run.failureReason,
+          nextAction: run.nextAction
+        });
+      }
+    }
+
+    if (results.some((item) => item.status !== "skipped")) {
+      refreshEngagementMetrics(state);
+      await writeState(state);
+    }
+
+    return {
+      ok: true,
+      ranAt: now(),
+      mode: force ? "force" : "scheduled",
+      total: results.length,
+      okCount: results.filter((item) => String(item.status).startsWith("ok")).length,
+      blocked: results.filter((item) => item.status === "blocked").length,
+      failed: results.filter((item) => item.status === "failed").length,
+      skipped: results.filter((item) => item.status === "skipped").length,
+      results
+    };
+  } finally {
+    automationTickRunning = false;
+  }
 }
 
 function importBrowserCapture(state, sourceId, items) {
@@ -523,13 +672,30 @@ async function handleApi(request, response, pathname) {
 
   if (pathname === "/api/collect") {
     try {
-      const run = await runCollection(state, body.sourceId);
-      refreshEngagementMetrics(state);
-      await writeState(state);
-      return sendJson(response, 200, { ok: true, run }, request);
+      const run = await collectWithLock(state, body.sourceId, "manual");
+      if (run) {
+        refreshEngagementMetrics(state);
+        await writeState(state);
+        return sendJson(response, 200, { ok: true, run }, request);
+      }
+      return sendJson(response, 200, { ok: true, skipped: true, reason: "source is already running" }, request);
     } catch (error) {
       return sendJson(response, 400, { ok: false, error: error.message }, request);
     }
+  }
+
+  if (pathname === "/api/automation/tick") {
+    const result = await runAutomationTick(body.force === true);
+    return sendJson(response, 200, result, request);
+  }
+
+  if (pathname === "/api/automation/settings") {
+    if (typeof body.automationEnabled !== "boolean") {
+      return sendJson(response, 400, { ok: false, error: "automationEnabled must be boolean" }, request);
+    }
+    state.settings.automationEnabled = body.automationEnabled;
+    await writeState(state);
+    return sendJson(response, 200, { ok: true, settings: state.settings }, request);
   }
 
   if (pathname === "/api/browser-capture") {
@@ -577,4 +743,13 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`Personal Content Workbench: http://127.0.0.1:${port}`);
+  console.log(`Automation scheduler: ${["false", "0", "off"].includes(String(process.env.AUTOMATION_ENABLED || "").toLowerCase()) ? "disabled" : "enabled"}, tick ${automationTickMs}ms`);
 });
+
+const automationTimer = setInterval(() => {
+  runAutomationTick(false).catch((error) => {
+    console.error(`Automation tick failed: ${error.message}`);
+  });
+}, automationTickMs);
+
+server.on("close", () => clearInterval(automationTimer));

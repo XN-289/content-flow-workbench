@@ -49,6 +49,16 @@ const methodLabels = {
   "research-only": "仅研究"
 };
 
+const automationLabels = {
+  scheduled: "已排程",
+  running: "运行中",
+  retrying: "失败重试",
+  "manual-required": "待人工",
+  "on-demand": "按需",
+  disabled: "已停用",
+  "research-only": "仅研究"
+};
+
 const dispositionLabels = {
   inbox: "待处理",
   discard: "丢弃",
@@ -224,6 +234,33 @@ function displayDate(value) {
   return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+function automationVariant(status) {
+  if (status === "running" || status === "scheduled") return "accent";
+  if (status === "retrying") return "danger";
+  if (status === "manual-required") return "warn";
+  return "";
+}
+
+function sourceScheduleTags(source) {
+  const status = automationLabels[source.automationStatus] || "未排程";
+  const tags = [tag(status, automationVariant(source.automationStatus))];
+  if (["scheduled", "running", "retrying", "manual-required"].includes(source.automationStatus) && source.nextRunAt) {
+    tags.push(tag(`下次 ${displayDate(source.nextRunAt)}`, new Date(source.nextRunAt).getTime() <= Date.now() ? "warn" : "info"));
+  }
+  if (source.failureCount > 0) tags.push(tag(`失败 ${source.failureCount} 次`, "danger"));
+  return tags.join("");
+}
+
+function isScheduledSource(source) {
+  return source.enabled !== false
+    && source.checkFrequency !== "on-demand"
+    && source.collectionMethod !== "research-only";
+}
+
+function isDueSource(source) {
+  return isScheduledSource(source) && Boolean(source.nextRunAt) && new Date(source.nextRunAt).getTime() <= Date.now();
+}
+
 function signalStrength(signal) {
   if (signal.relativeMultiple !== null && signal.relativeMultiple !== undefined) return Number(signal.relativeMultiple);
   if (signal.engagement !== null && signal.engagement !== undefined) return Number(signal.engagement);
@@ -354,13 +391,20 @@ function renderToday() {
 }
 
 function renderSources() {
+  const dueCount = state.sources.filter(isDueSource).length;
+  const retryingCount = state.sources.filter((source) => source.automationStatus === "retrying").length;
+
   return `
     <section class="page-head">
       <div>
         <h1 class="page-title">对标账号</h1>
-        <p class="page-subtitle">账号注册表 · 采集运行状态</p>
+        <p class="page-subtitle">账号注册表 · 自动化${state.settings.automationEnabled === false ? "关" : "开"} · 到期 ${dueCount} · 重试 ${retryingCount}</p>
       </div>
-      <button type="button" class="ghost-button" data-action="run-all">运行全部采集</button>
+      <div class="head-actions">
+        <button type="button" class="small-button accent" data-action="run-automation">检查到期采集</button>
+        <button type="button" class="small-button" data-action="run-all">强制检查全部</button>
+        <button type="button" class="small-button" data-action="toggle-automation">${state.settings.automationEnabled === false ? "开启自动化" : "暂停自动化"}</button>
+      </div>
     </section>
     <div class="split">
       <div>
@@ -416,8 +460,10 @@ function renderSources() {
                 ${tag(platformLabels[source.platform] || source.platform, "info")}
                 ${tag(methodLabels[source.collectionMethod] || source.collectionMethod || "未设置")}
                 ${tag(source.checkFrequency || "daily")}
+                ${sourceScheduleTags(source)}
                 ${source.authorMedianEngagement ? tag(`中位数 ${source.authorMedianEngagement} · 样本 ${source.engagementSampleCount || 0}`) : ""}
               </div>
+              ${source.lastCollectionError ? `<p class="item-note danger-text">${escapeHtml(source.lastCollectionError)}</p>` : ""}
               ${source.keepReason ? `<p class="item-note">${escapeHtml(source.keepReason)}</p>` : ""}
               <div class="item-actions">
                 <button type="button" class="small-button accent" data-action="run-source" data-id="${escapeHtml(source.id)}">运行采集</button>
@@ -729,26 +775,41 @@ function renderReview() {
 }
 
 function renderRuns() {
+  const dueCount = state.sources.filter(isDueSource).length;
+  const manualCount = state.sources.filter((source) => source.automationStatus === "manual-required").length;
+  const retryingCount = state.sources.filter((source) => source.automationStatus === "retrying").length;
+  const failedRuns = state.collectionRuns.filter((run) => run.status === "failed").length;
+
   return `
     <section class="page-head">
       <div><h1 class="page-title">采集运行</h1><p class="page-subtitle">状态 · 数量 · 失败原因 · 人工下一步</p></div>
-      <button type="button" class="ghost-button" data-action="run-all">运行全部采集</button>
+      <div class="head-actions">
+        <button type="button" class="small-button accent" data-action="run-automation">检查到期采集</button>
+        <button type="button" class="small-button" data-action="run-all">强制检查全部</button>
+      </div>
     </section>
+    <div class="metric-grid">
+      <div class="metric"><div class="metric-value">${dueCount}</div><div class="metric-label">到期任务</div></div>
+      <div class="metric"><div class="metric-value">${manualCount}</div><div class="metric-label">待人工账号</div></div>
+      <div class="metric"><div class="metric-value">${retryingCount}</div><div class="metric-label">重试中账号</div></div>
+      <div class="metric"><div class="metric-value">${failedRuns}</div><div class="metric-label">失败运行记录</div></div>
+    </div>
     <section class="panel">
       <div class="table-wrap">
         <table class="run-table">
-          <thead><tr><th>时间</th><th>账号</th><th>状态</th><th>发现 / 新增</th><th>失败原因</th><th>下一步</th></tr></thead>
+          <thead><tr><th>时间</th><th>账号</th><th>触发</th><th>状态</th><th>发现 / 新增</th><th>失败原因</th><th>下一步</th></tr></thead>
           <tbody>
             ${state.collectionRuns.length ? state.collectionRuns.slice(0, 50).map((run) => `
               <tr>
                 <td class="mono">${escapeHtml(displayDate(run.startedAt))}</td>
                 <td>${escapeHtml(sourceById(run.sourceId)?.name || run.sourceId)}</td>
+                <td>${escapeHtml(run.trigger || "manual")}</td>
                 <td>${escapeHtml(run.status)}</td>
                 <td>${run.found || 0} / ${run.created || 0}</td>
                 <td>${escapeHtml(run.failureReason || "-")}</td>
                 <td>${escapeHtml(run.nextAction || "-")}</td>
               </tr>
-            `).join("") : `<tr><td colspan="6"><div class="empty">暂无运行记录</div></td></tr>`}
+            `).join("") : `<tr><td colspan="7"><div class="empty">暂无运行记录</div></td></tr>`}
           </tbody>
         </table>
       </div>
@@ -829,6 +890,12 @@ document.addEventListener("click", async (event) => {
     } else if (action === "run-source") {
       await api("/api/collect", "POST", { sourceId: recordId });
       await loadState();
+    } else if (action === "run-automation") {
+      await api("/api/automation/tick", "POST", { force: false });
+      await loadState();
+    } else if (action === "toggle-automation") {
+      await api("/api/automation/settings", "POST", { automationEnabled: state.settings.automationEnabled === false });
+      await loadState();
     } else if (action === "copy-xhs-collector") {
       await navigator.clipboard.writeText(xhsBookmarkletHref(recordId));
       button.textContent = "已复制";
@@ -836,10 +903,7 @@ document.addEventListener("click", async (event) => {
         button.textContent = "复制脚本";
       }, 1600);
     } else if (action === "run-all") {
-      for (const source of state.sources) {
-        if (source.collectionMethod === "research-only") continue;
-        await api("/api/collect", "POST", { sourceId: source.id });
-      }
+      await api("/api/automation/tick", "POST", { force: true });
       await loadState();
     } else if (action === "disposition") {
       await updateRecord("signals", recordId, { disposition: button.dataset.value, seen: true });
@@ -944,6 +1008,8 @@ document.addEventListener("submit", async (event) => {
         ...data,
         authorMedianEngagement: data.authorMedianEngagement ? Number(data.authorMedianEngagement) : null,
         lastRunStatus: "never-run",
+        failureCount: 0,
+        lastCollectionError: "",
         tags: []
       });
     } else if (form.id === "import-form") {

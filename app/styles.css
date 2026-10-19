@@ -143,6 +143,14 @@ textarea {
   margin-bottom: 18px;
 }
 
+.head-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .page-title {
   margin: 0;
   font-size: 22px;
@@ -351,6 +359,10 @@ textarea {
   font-size: 12px;
 }
 
+.danger-text {
+  color: var(--danger);
+}
+
 .panel-note {
   margin: 10px 0 0;
   color: var(--muted);
@@ -528,6 +540,16 @@ textarea {
 }
 
 @media (max-width: 760px) {
+  .page-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .head-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .topbar {
     position: static;
     align-items: stretch;
