@@ -12,6 +12,7 @@ async function post(path, body) {
 }
 
 const force = process.argv.includes("--force");
-const result = await post("/api/automation/tick", { force });
+const dropFolder = await post("/api/drop-folder/scan", {});
+const collection = await post("/api/automation/tick", { force });
 
-console.log(JSON.stringify(result, null, 2));
+console.log(JSON.stringify({ dropFolder, collection }, null, 2));

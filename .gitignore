@@ -4,6 +4,8 @@ data/workbench.json.*.tmp
 data/*.local.json
 data/exports/
 data/raw/
+drops/*
+!drops/README.md
 
 # Environment and runtime artifacts
 .env

@@ -69,6 +69,22 @@ const dispositionLabels = {
   produce: "生产"
 };
 
+const automationTierLabels = {
+  "high-potential": "高潜力",
+  "worth-watching": "值得观察",
+  normal: "常规",
+  "needs-review": "待补数据"
+};
+
+const triggerLabels = {
+  automatic: "自动",
+  force: "强制",
+  manual: "手动",
+  "drop-folder": "投递箱",
+  "drop-folder-manual": "投递箱手动",
+  "quick-capture": "快速粘贴"
+};
+
 const productionCheckLabels = {
   coreIdea: "核心观点",
   targetReader: "目标读者",
@@ -137,8 +153,10 @@ function topicById(id) {
 }
 
 function sourceOptions(selectedId = "") {
-  if (!state.sources.length) return `<option value="">先在账号页添加</option>`;
-  return state.sources.map((source) => (
+  const placeholder = state.sources.length
+    ? `<option value="">自动匹配账号</option>`
+    : `<option value="">自动匹配，未匹配则入其他</option>`;
+  return placeholder + state.sources.map((source) => (
     `<option value="${escapeHtml(source.id)}" ${source.id === selectedId ? "selected" : ""}>${escapeHtml(source.name || source.account || source.url)}</option>`
   )).join("");
 }
@@ -273,6 +291,11 @@ function signalTime(signal) {
   return Math.max(published, captured);
 }
 
+function latestDailyBrief() {
+  const today = new Date().toLocaleDateString("sv-SE");
+  return (state.morningBriefs || []).find((brief) => brief.date === today) || null;
+}
+
 function readNumberInput(input) {
   const value = input.value.trim();
   if (!value) return null;
@@ -317,12 +340,18 @@ function render() {
 
 function renderToday() {
   const inboxCount = state.signals.filter((signal) => signal.disposition === "inbox").length;
+  const highPotentialCount = state.signals.filter((signal) => signal.disposition === "inbox" && signal.automationTier === "high-potential").length;
+  const manualActionCount = state.sources.filter((source) => source.automationStatus === "manual-required").length;
   const producing = state.topics.filter((topic) => ["outline", "draft", "production", "review"].includes(topic.stage)).length;
   const ready = state.topics.filter((topic) => topic.stage === "ready-to-publish").length;
   const published = state.publications.filter((item) => item.status === "published").length;
   const focusTopics = state.topics
     .filter((topic) => !["published", "reviewed"].includes(topic.stage))
     .slice(0, 5);
+  const brief = latestDailyBrief();
+  const briefSignals = brief
+    ? brief.topSignalIds.map((signalId) => state.signals.find((signal) => signal.id === signalId)).filter(Boolean)
+    : [];
 
   return `
     <section class="page-head">
@@ -333,6 +362,8 @@ function renderToday() {
     </section>
     <div class="metric-grid">
       <div class="metric"><div class="metric-value">${inboxCount}</div><div class="metric-label">待处理信号</div></div>
+      <div class="metric"><div class="metric-value">${highPotentialCount}</div><div class="metric-label">高潜力信号</div></div>
+      <div class="metric"><div class="metric-value">${manualActionCount}</div><div class="metric-label">待人工账号</div></div>
       <div class="metric"><div class="metric-value">${producing}</div><div class="metric-label">生产中</div></div>
       <div class="metric"><div class="metric-value">${ready}</div><div class="metric-label">待发布</div></div>
       <div class="metric"><div class="metric-value">${published}</div><div class="metric-label">已发布记录</div></div>
@@ -340,13 +371,41 @@ function renderToday() {
     <div class="split">
       <div>
         <section class="panel">
-          <h2 class="panel-title">快速收集</h2>
+          <div class="item-head">
+            <h2 class="panel-title">晨报</h2>
+            ${brief ? tag(displayDate(brief.generatedAt), "accent") : tag("等待生成", "warn")}
+          </div>
+          <div class="list">
+            ${brief ? `
+              <article class="item-card">
+                <div class="item-meta">
+                  ${brief.nextActions.map((action) => tag(action, "accent")).join("")}
+                </div>
+              </article>
+              ${briefSignals.length ? briefSignals.map((signal) => `
+                <article class="item-card">
+                  <div class="item-head">
+                    <h3 class="item-title">${escapeHtml(signal.title || signal.note || "未命名信号")}</h3>
+                    ${tag(automationTierLabels[signal.automationTier] || "待补数据", signal.automationTier === "high-potential" ? "accent" : "warn")}
+                  </div>
+                  <div class="item-meta">
+                    ${tag(platformLabels[signal.platform] || signal.platform, "info")}
+                    ${tag(`互动 ${signal.engagement ?? "未填"}`)}
+                    ${signal.relativeMultiple !== null && signal.relativeMultiple !== undefined ? tag(`${signal.relativeMultiple}x`, "accent") : ""}
+                  </div>
+                </article>
+              `).join("") : `<div class="empty">暂无待处理信号</div>`}
+            ` : `<div class="empty">到达 Inbox 时间后自动生成</div>`}
+          </div>
+        </section>
+        <section class="panel">
+          <h2 class="panel-title">快速粘贴</h2>
           <form id="quick-capture" class="form-grid">
             <div class="field full"><label>来源账号</label><select name="sourceId">${sourceOptions()}</select></div>
-            <div class="field full"><label>链接</label><input name="url" required placeholder="https://"></div>
-            <div class="field full"><label>原因</label><textarea name="note" required></textarea></div>
-            <div class="form-actions"><button class="primary-button" type="submit">进 Inbox</button></div>
+            <div class="field full"><label>粘贴原文</label><textarea name="text" rows="7" required placeholder="直接粘贴链接、标题、点赞数、热评或 JSON。系统会自动识别 URL、账号、互动数和热评。"></textarea></div>
+            <div class="form-actions"><button class="primary-button" type="submit">自动解析入库</button></div>
           </form>
+          <p class="panel-note">支持“热评： ...”“@评论者： ...”和 JSON。识别结果仍先进 Inbox / 素材库，不自动替你判断价值。</p>
         </section>
         <section class="panel">
           <h2 class="panel-title">摩擦记录</h2>
@@ -430,6 +489,13 @@ function renderSources() {
             <div class="field full"><label>导入文件</label><input name="file" type="file" accept="application/json,.json" required></div>
             <div class="form-actions"><button class="primary-button" type="submit">导入</button></div>
           </form>
+        </section>
+        <section class="panel">
+          <div class="item-head">
+            <h2 class="panel-title">本地投递箱</h2>
+            <button type="button" class="small-button accent" data-action="scan-drop-folder">立即检查</button>
+          </div>
+          <p class="panel-note">drops/*.json · *.md · *.txt</p>
         </section>
         <section class="panel">
           <h2 class="panel-title">浏览器采集导入</h2>
@@ -521,6 +587,7 @@ function renderInbox() {
               ${tag(source?.name || source?.account || "未关联账号")}
               ${tag(`发布 ${displayDate(signal.publishedAt)}`)}
               ${tag(`互动 ${signal.engagement ?? "未填"}`)}
+              ${signal.automationTier ? tag(automationTierLabels[signal.automationTier] || signal.automationTier, signal.automationTier === "high-potential" ? "accent" : "") : ""}
               ${median !== null && median !== undefined ? tag(`中位数 ${median}`) : ""}
               ${multiple !== null && multiple !== undefined ? tag(`${multiple}x`, "accent") : ""}
               ${source ? tag(`样本 ${source.engagementSampleCount || 0}`) : ""}
@@ -803,7 +870,7 @@ function renderRuns() {
               <tr>
                 <td class="mono">${escapeHtml(displayDate(run.startedAt))}</td>
                 <td>${escapeHtml(sourceById(run.sourceId)?.name || run.sourceId)}</td>
-                <td>${escapeHtml(run.trigger || "manual")}</td>
+                <td>${escapeHtml(triggerLabels[run.trigger] || run.trigger || "手动")}</td>
                 <td>${escapeHtml(run.status)}</td>
                 <td>${run.found || 0} / ${run.created || 0}</td>
                 <td>${escapeHtml(run.failureReason || "-")}</td>
@@ -905,6 +972,9 @@ document.addEventListener("click", async (event) => {
     } else if (action === "run-all") {
       await api("/api/automation/tick", "POST", { force: true });
       await loadState();
+    } else if (action === "scan-drop-folder") {
+      await api("/api/drop-folder/scan", "POST", {});
+      await loadState();
     } else if (action === "disposition") {
       await updateRecord("signals", recordId, { disposition: button.dataset.value, seen: true });
     } else if (action === "signal-material") {
@@ -985,23 +1055,8 @@ document.addEventListener("submit", async (event) => {
   try {
     if (form.id === "quick-capture") {
       const data = formObject(form);
-      const source = sourceById(data.sourceId);
-      await saveRecord("signals", {
-        sourceId: data.sourceId || "",
-        collectionRunId: "",
-        platform: source?.platform || "other",
-        author: source?.account || source?.name || "",
-        url: data.url,
-        title: "",
-        publishedAt: "",
-        capturedAt: new Date().toISOString(),
-        engagement: null,
-        authorMedianEngagement: source?.authorMedianEngagement ?? null,
-        relativeMultiple: null,
-        seen: false,
-        disposition: "inbox",
-        note: data.note
-      });
+      const result = await api("/api/capture", "POST", { text: data.text, sourceId: data.sourceId });
+      alert(`解析完成：发现 ${result.run.found} 条，新增 ${result.run.created} 条，重复 ${result.run.duplicates} 条。`);
     } else if (form.id === "source-form") {
       const data = formObject(form);
       await saveRecord("sources", {
@@ -1020,6 +1075,7 @@ document.addEventListener("submit", async (event) => {
       await loadState();
     } else if (form.id === "browser-capture-form") {
       const data = formObject(form);
+      if (!data.sourceId) throw new Error("请选择来源账号。");
       const items = JSON.parse(data.items);
       const result = await api("/api/browser-capture", "POST", { sourceId: data.sourceId, items });
       await loadState();

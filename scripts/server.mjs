@@ -8,17 +8,24 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appDir = path.join(root, "app");
 const dataDir = path.join(root, "data");
 const dataFile = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : path.join(dataDir, "workbench.json");
+const dropDir = process.env.DROP_DIR ? path.resolve(process.env.DROP_DIR) : path.join(root, "drops");
+const dropProcessedDir = path.join(dropDir, "processed");
+const dropFailedDir = path.join(dropDir, "failed");
 const port = Number(process.env.PORT || 5177);
 const automationTickMs = Math.max(1000, Number(process.env.AUTOMATION_TICK_MS || 60000));
+const dropScanMs = Math.max(1000, Number(process.env.DROP_SCAN_MS || 10000));
 const automaticMethods = new Set(["public-rss", "public-page"]);
+const dropExtensions = new Set([".json", ".md", ".txt"]);
 const runningSourceIds = new Set();
 let automationTickRunning = false;
+let pipelineBusy = false;
 
 const emptyState = () => ({
   version: 1,
   settings: {
     collectionTime: "08:40",
     automationEnabled: true,
+    morningBriefEnabled: true,
     inboxTime: "09:00",
     inboxDailyLimit: 10,
     streakDefinition: ""
@@ -32,6 +39,7 @@ const emptyState = () => ({
   reviews: [],
   collectionRuns: [],
   rawSnapshots: [],
+  morningBriefs: [],
   frictionLog: []
 });
 
@@ -70,6 +78,18 @@ function id(prefix) {
 
 function now() {
   return new Date().toISOString();
+}
+
+function localDateKey(date = new Date()) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0")
+  ].join("-");
+}
+
+function localMinuteOfDay(date = new Date()) {
+  return date.getHours() * 60 + date.getMinutes();
 }
 
 function collectionSlot(value, from = new Date()) {
@@ -129,6 +149,13 @@ function automationEnabled(state) {
   return !envDisabled && state.settings.automationEnabled !== false;
 }
 
+function automationTier(signal = {}) {
+  if (signal.relativeMultiple === null || signal.relativeMultiple === undefined) return "needs-review";
+  if (signal.relativeMultiple >= 3) return "high-potential";
+  if (signal.relativeMultiple >= 1.5) return "worth-watching";
+  return "normal";
+}
+
 function corsHeaders(request) {
   const origin = request.headers?.origin || "";
   const allowedOrigins = new Set([
@@ -164,33 +191,46 @@ async function readBody(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-function identityKey(type, record = {}) {
-  if (type === "sources") return record.url || record.id || id("source");
-  if (type === "signals") return signalIdentityKey(record) || record.id || id("signal");
-  if (type === "materials") return `${record.sourceUrl || ""}||${record.excerpt || ""}` || record.id || id("material");
-  if (type === "topics") return (record.title || "").trim().toLowerCase() || record.id || id("topic");
-  return record.id || id(type.replace(/s$/, ""));
+function identityKeys(type, record = {}) {
+  if (type === "sources") return [normalizeUrl(record.url) || record.id].filter(Boolean);
+  if (type === "signals") return signalIdentityKeys(record);
+  if (type === "materials") {
+    const key = `${normalizeUrl(record.sourceUrl) || ""}||${String(record.excerpt || "").replace(/\s+/g, " ").trim()}`;
+    return [key].filter(Boolean);
+  }
+  if (type === "topics") return [(record.title || "").trim().toLowerCase()].filter(Boolean);
+  return [record.id].filter(Boolean);
 }
 
 function importRecords(state, type, records = []) {
   const existing = state[type] || [];
-  const index = new Map(existing.map((record) => [identityKey(type, record), record]));
+  const recordIndex = new Map(existing.map((record) => [record.id, record]));
+  const keyIndex = new Map();
+  for (const record of [...recordIndex.values()]) {
+    for (const key of identityKeys(type, record)) {
+      if (!keyIndex.has(key)) keyIndex.set(key, record.id);
+    }
+  }
   let added = 0;
   let merged = 0;
   for (const incoming of records) {
     if (!incoming || typeof incoming !== "object") continue;
-    const key = identityKey(type, incoming);
+    const incomingKeys = identityKeys(type, incoming).filter(Boolean);
+    const matchedKey = incomingKeys.find((key) => keyIndex.has(key));
     const patch = Object.fromEntries(
       Object.entries(incoming).filter(([, value]) => value !== undefined && value !== null && value !== "")
     );
-    if (index.has(key)) {
-      const current = index.get(key);
-      index.set(key, {
+    if (matchedKey) {
+      const currentId = keyIndex.get(matchedKey);
+      const current = recordIndex.get(currentId);
+      const mergedRecord = {
         ...current,
         ...patch,
         id: current.id,
         updatedAt: now()
-      });
+      };
+      recordIndex.set(current.id, mergedRecord);
+      for (const key of identityKeys(type, mergedRecord)) keyIndex.set(key, current.id);
       merged += 1;
     } else {
       const record = {
@@ -199,24 +239,65 @@ function importRecords(state, type, records = []) {
         createdAt: incoming.createdAt || now(),
         updatedAt: now()
       };
-      index.set(key, record);
+      recordIndex.set(record.id, record);
+      for (const key of identityKeys(type, record)) keyIndex.set(key, record.id);
       added += 1;
     }
   }
-  state[type] = [...index.values()];
+  state[type] = [...recordIndex.values()];
   return { added, merged };
 }
 
-function signalIdentityKey(record = {}) {
+function normalizedTitle(value = "") {
+  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function normalizedDate(value = "") {
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : String(value || "").trim();
+}
+
+function platformContentId(platform = "", value = "") {
+  const url = String(value || "");
+  const patterns = {
+    xiaohongshu: /\/(?:explore|discovery\/item)\/([A-Za-z0-9]+)/,
+    x: /\/status(?:es)?\/(\d+)/,
+    douyin: /\/video\/(\d+)/,
+    wechat: /\/s\/([A-Za-z0-9_-]+)/
+  };
+  const pattern = patterns[platform];
+  return pattern ? (url.match(pattern)?.[1] || "") : "";
+}
+
+function signalIdentityKeys(record = {}) {
   const url = canonicalSignalUrl(record.url);
-  if (url) return url;
+  const platform = String(record.platform || "").trim().toLowerCase() || "other";
+  const contentId = platformContentId(platform, url || record.url || "");
+  const title = normalizedTitle(record.title);
+  const author = normalizedTitle(record.author);
+  const publishedAt = normalizedDate(record.publishedAt);
+  const keys = [];
+  if (url) keys.push(`url:${url}`);
+  if (contentId) keys.push(`content:${platform}:${contentId}`);
+  if (title && author) keys.push(`title-author:${platform}:${author}:${title}`);
+  if (title && publishedAt) keys.push(`title-date:${platform}:${title}:${publishedAt}`);
   const parts = [
-    record.platform || "",
-    record.author || "",
-    record.title || "",
-    record.publishedAt || ""
-  ].map((value) => String(value).trim().toLowerCase());
-  return parts.some(Boolean) ? parts.join("||") : "";
+    platform,
+    author,
+    title,
+    publishedAt
+  ];
+  if (parts.some(Boolean)) keys.push(`fallback:${parts.join("||")}`);
+  return keys;
+}
+
+function signalIdentityKey(record = {}) {
+  return signalIdentityKeys(record)[0] || "";
+}
+
+function hasSignal(state, candidate) {
+  const keys = new Set(signalIdentityKeys(candidate));
+  return (state.signals || []).some((signal) => signalIdentityKeys(signal).some((key) => keys.has(key)));
 }
 
 function parseCount(value) {
@@ -303,8 +384,81 @@ function refreshEngagementMetrics(state) {
       signal.relativeMultiple = Number.isFinite(signal.engagement)
         ? Number((signal.engagement / authorMedian).toFixed(2))
         : null;
+      signal.automationTier = automationTier(signal);
     }
   }
+}
+
+function signalPriority(signal = {}) {
+  const multiple = Number(signal.relativeMultiple);
+  const engagement = Number(signal.engagement);
+  const time = Math.max(
+    new Date(signal.publishedAt || 0).getTime() || 0,
+    new Date(signal.capturedAt || 0).getTime() || 0
+  );
+  return [
+    Number.isFinite(multiple) ? multiple : -1,
+    Number.isFinite(engagement) ? engagement : -1,
+    time
+  ];
+}
+
+function compareSignals(left, right) {
+  const leftPriority = signalPriority(left);
+  const rightPriority = signalPriority(right);
+  for (let index = 0; index < leftPriority.length; index += 1) {
+    if (leftPriority[index] !== rightPriority[index]) return rightPriority[index] - leftPriority[index];
+  }
+  return String(left.title || "").localeCompare(String(right.title || ""), "zh-CN");
+}
+
+function buildMorningBrief(state) {
+  const timestamp = new Date();
+  const pending = (state.signals || []).filter((signal) => signal.disposition === "inbox");
+  const topSignals = [...pending].sort(compareSignals).slice(0, 5);
+  const manualSources = (state.sources || []).filter((source) => source.automationStatus === "manual-required");
+  const retryingSources = (state.sources || []).filter((source) => source.automationStatus === "retrying");
+  const nextActions = [];
+
+  if (topSignals.length) nextActions.push(`先看 ${Math.min(topSignals.length, 3)} 条优先信号`);
+  if (manualSources.length) nextActions.push(`处理 ${manualSources.length} 个待人工账号`);
+  if (retryingSources.length) nextActions.push(`复核 ${retryingSources.length} 个失败重试账号`);
+  if (!nextActions.length) nextActions.push("采集链路稳定，直接进入生产块");
+
+  return {
+    id: `brief-${localDateKey(timestamp)}`,
+    date: localDateKey(timestamp),
+    generatedAt: timestamp.toISOString(),
+    inboxCount: pending.length,
+    highPotentialCount: pending.filter((signal) => signal.automationTier === "high-potential").length,
+    worthWatchingCount: pending.filter((signal) => signal.automationTier === "worth-watching").length,
+    manualActionCount: manualSources.length,
+    retryingCount: retryingSources.length,
+    topicCount: (state.topics || []).filter((topic) => !["published", "reviewed"].includes(topic.stage)).length,
+    topSignalIds: topSignals.map((signal) => signal.id),
+    nextActions
+  };
+}
+
+function refreshMorningBrief(state) {
+  if (state.settings.morningBriefEnabled === false) return false;
+  const timestamp = new Date();
+  const [hours, minutes] = String(state.settings.inboxTime || "09:00").split(":").map(Number);
+  if (localMinuteOfDay(timestamp) < (hours || 0) * 60 + (minutes || 0)) return false;
+
+  const briefs = state.morningBriefs || [];
+  const brief = buildMorningBrief(state);
+  const index = briefs.findIndex((item) => item.date === brief.date);
+  if (index >= 0) {
+    const current = briefs[index];
+    const unchanged = JSON.stringify({ ...current, generatedAt: "" }) === JSON.stringify({ ...brief, generatedAt: "" });
+    if (unchanged) return false;
+    briefs[index] = brief;
+  } else {
+    briefs.unshift(brief);
+  }
+  state.morningBriefs = briefs.slice(0, 30);
+  return true;
 }
 
 function parseFeed(xml) {
@@ -337,6 +491,116 @@ function parseFeed(xml) {
       publishedAt: pick(block, "pubDate") || pick(block, "published") || pick(block, "updated")
     };
   }).filter((item) => item.link);
+}
+
+function decodeHtmlText(value = "") {
+  return String(value || "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function htmlAttribute(tag = "", name = "") {
+  const match = tag.match(new RegExp(`${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, "i"));
+  return decodeHtmlText(match?.[2] || match?.[3] || match?.[4] || "");
+}
+
+function htmlTagText(html, tag) {
+  return decodeHtmlText(html.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"))?.[1] || "");
+}
+
+function collectJsonLdArticles(html) {
+  const blocks = html.match(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
+  const articles = [];
+  const visit = (value) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value !== "object") return;
+    const type = Array.isArray(value["@type"]) ? value["@type"] : [value["@type"]].filter(Boolean);
+    if (type.some((item) => String(item).toLowerCase().includes("article"))) {
+      articles.push(value);
+    }
+    Object.values(value).forEach(visit);
+  };
+
+  for (const block of blocks) {
+    try {
+      visit(JSON.parse(block.replace(/^<script\b[^>]*>/i, "").replace(/<\/script>$/i, "")));
+    } catch {
+      // A malformed third-party structured-data block does not invalidate the whole page.
+    }
+  }
+  return articles;
+}
+
+function absoluteUrl(value, baseUrl) {
+  try {
+    return new URL(value, baseUrl).toString();
+  } catch {
+    return "";
+  }
+}
+
+function parsePublicPage(html, pageUrl) {
+  const meta = new Map();
+  for (const tag of html.match(/<meta\b[^>]*>/gi) || []) {
+    const name = htmlAttribute(tag, "property") || htmlAttribute(tag, "name");
+    const content = htmlAttribute(tag, "content");
+    if (name && content && !meta.has(name)) meta.set(name, content);
+  }
+  const canonicalTag = (html.match(/<link\b[^>]*rel\s*=\s*["']canonical["'][^>]*>/i) || [])[0] || "";
+  const canonicalUrl = canonicalTag ? absoluteUrl(htmlAttribute(canonicalTag, "href"), pageUrl) : pageUrl;
+  const title = meta.get("og:title") || meta.get("twitter:title") || htmlTagText(html, "title");
+  const article = collectJsonLdArticles(html)[0] || {};
+  const jsonLdAuthor = Array.isArray(article.author) ? article.author[0] : article.author;
+  const author = meta.get("author")
+    || meta.get("article:author")
+    || (typeof jsonLdAuthor === "string" ? jsonLdAuthor : jsonLdAuthor?.name)
+    || "";
+  const publishedAt = meta.get("article:published_time") || meta.get("date") || article.datePublished || "";
+  const pageType = String(meta.get("og:type") || "").toLowerCase();
+
+  if (title && (pageType.includes("article") || publishedAt || article["@type"])) {
+    return [{
+      title,
+      url: absoluteUrl(meta.get("og:url") || canonicalUrl, pageUrl),
+      author,
+      publishedAt,
+      description: meta.get("description") || meta.get("og:description") || ""
+    }];
+  }
+
+  let host = "";
+  try {
+    host = new URL(pageUrl).hostname;
+  } catch {
+    host = "";
+  }
+  const links = new Map();
+  for (const tag of html.match(/<a\b[^>]*>[\s\S]*?<\/a>/gi) || []) {
+    const href = absoluteUrl(htmlAttribute(tag, "href"), pageUrl);
+    const text = decodeHtmlText(tag.replace(/<[^>]+>/g, " "));
+    if (!href || !text || text.length < 4) continue;
+    let linkHost = "";
+    try {
+      linkHost = new URL(href).hostname;
+    } catch {
+      linkHost = "";
+    }
+    if (host && linkHost && linkHost !== host) continue;
+    if (/\?(utm_|ref|spm)/i.test(href) || /\/(login|signup|about|contact)(\/|$)/i.test(href)) continue;
+    const key = canonicalSignalUrl(href);
+    if (key && !links.has(key)) links.set(key, { title: text, url: href, author: "", publishedAt: "", description: "" });
+  }
+  return [...links.values()].slice(0, 100);
 }
 
 async function runCollection(state, sourceId, trigger = "manual") {
@@ -382,7 +646,14 @@ async function runCollection(state, sourceId, trigger = "manual") {
       run.found = items.length;
       run.duplicates = 0;
       for (const item of items) {
-        if (state.signals.some((signal) => signalIdentityKey(signal) === canonicalSignalUrl(item.link))) {
+        const candidate = {
+          platform: source.platform,
+          author: source.account || source.name,
+          title: item.title,
+          url: item.link,
+          publishedAt: item.publishedAt
+        };
+        if (hasSignal(state, candidate)) {
           run.duplicates += 1;
           continue;
         }
@@ -425,10 +696,41 @@ async function runCollection(state, sourceId, trigger = "manual") {
         format: "html",
         content: html.slice(0, 500000)
       });
-      run.status = "ok";
-      run.found = 0;
-      run.created = 0;
-      run.nextAction = "原始快照已保存，等待页面解析器";
+      const items = parsePublicPage(html, response.url || source.url);
+      run.found = items.length;
+      run.duplicates = 0;
+      for (const item of items) {
+        const candidate = {
+          platform: source.platform,
+          author: item.author || source.account || source.name,
+          title: item.title,
+          url: item.url,
+          publishedAt: item.publishedAt
+        };
+        if (hasSignal(state, candidate)) {
+          run.duplicates += 1;
+          continue;
+        }
+        state.signals.unshift({
+          id: id("signal"),
+          sourceId: source.id,
+          collectionRunId: run.id,
+          ...candidate,
+          capturedAt: now(),
+          engagement: null,
+          authorMedianEngagement: source.authorMedianEngagement ?? null,
+          relativeMultiple: null,
+          automationTier: "needs-review",
+          seen: false,
+          disposition: "inbox",
+          note: item.description || "公开页面自动解析",
+          createdAt: now(),
+          updatedAt: now()
+        });
+        run.created += 1;
+      }
+      run.status = run.created > 0 ? "ok" : "ok-no-new";
+      run.nextAction = run.created > 0 ? "到 Inbox 分流" : "页面无新增信号，原始快照已保留";
     } else {
       run.status = "blocked";
       run.failureReason = `${source.collectionMethod} 需要人工动作或专用 adapter`;
@@ -476,10 +778,11 @@ async function collectWithLock(state, sourceId, trigger = "manual") {
 }
 
 async function runAutomationTick(force = false) {
-  if (automationTickRunning) {
-    return { ok: true, skipped: true, reason: "another automation tick is running" };
+  if (pipelineBusy) {
+    return { ok: true, skipped: true, reason: "another automation pipeline is running" };
   }
   automationTickRunning = true;
+  pipelineBusy = true;
 
   try {
     const state = await readState();
@@ -509,7 +812,8 @@ async function runAutomationTick(force = false) {
       }
     }
 
-    if (results.some((item) => item.status !== "skipped")) {
+    const briefChanged = refreshMorningBrief(state);
+    if (results.some((item) => item.status !== "skipped") || briefChanged) {
       refreshEngagementMetrics(state);
       await writeState(state);
     }
@@ -527,6 +831,7 @@ async function runAutomationTick(force = false) {
     };
   } finally {
     automationTickRunning = false;
+    pipelineBusy = false;
   }
 }
 
@@ -607,6 +912,448 @@ function importBrowserCapture(state, sourceId, items) {
   source.lastRunAt = run.finishedAt;
   refreshEngagementMetrics(state);
   return run;
+}
+
+function parseDropFile(fileName, text) {
+  const extension = path.extname(fileName).toLowerCase();
+  if (extension === ".json") {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return {
+        context: {},
+        signals: parsed.filter((item) => item && typeof item === "object" && item.url),
+        materials: parsed.filter((item) => item && typeof item === "object" && item.excerpt && !item.url)
+      };
+    }
+    if (!parsed || typeof parsed !== "object") throw new Error("JSON must be an array or object");
+    return {
+      context: parsed,
+      signals: Array.isArray(parsed.signals) ? parsed.signals : parsed.url ? [parsed] : [],
+      materials: Array.isArray(parsed.materials) ? parsed.materials : parsed.excerpt ? [parsed] : []
+    };
+  }
+
+  if (!extension || extension === ".md" || extension === ".txt") {
+    const lines = text.split(/\r?\n/);
+    const metadata = {};
+    const bodyLines = [];
+    for (const line of lines) {
+      const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
+      if (match && bodyLines.length === 0) {
+        metadata[match[1].toLowerCase()] = match[2].trim();
+        continue;
+      }
+      bodyLines.push(line);
+    }
+
+    let body = bodyLines.join("\n").trim();
+    let title = metadata.title || "";
+    const heading = body.match(/^#\s+(.+)$/m);
+    if (heading) {
+      title = title || heading[1].trim();
+      body = body.replace(heading[0], "").trim();
+    }
+    const url = metadata.url || metadata.sourceurl || body.match(/https?:\/\/[^\s)]+/)?.[0] || "";
+    const kind = String(metadata.kind || "").toLowerCase();
+    const type = String(metadata.type || "").toLowerCase();
+    const materialTypes = new Set(["opinion", "case", "data", "quote", "hot-comment", "counter-example", "lead"]);
+    const context = {
+      sourceId: metadata.sourceid || "",
+      platform: metadata.platform || "",
+      author: metadata.author || ""
+    };
+
+    if (kind === "material" || (!kind && !url && body)) {
+      return {
+        context,
+        signals: [],
+        materials: [{
+          ...metadata,
+          type: materialTypes.has(type) ? type : "opinion",
+          possibleUse: metadata.possibleuse || metadata.use || "evidence",
+          sourceUrl: url,
+          excerpt: body
+        }]
+      };
+    }
+
+    if (!url) throw new Error("text drop needs url, sourceUrl, or kind: material");
+    return {
+      context,
+      signals: [{
+        title,
+        url,
+        engagement: metadata.engagement || null,
+        author: metadata.author || "",
+        platform: metadata.platform || "",
+        publishedAt: metadata.publishedat || "",
+        note: body || metadata.note || ""
+      }],
+      materials: []
+    };
+  }
+
+  throw new Error("unsupported drop file type");
+}
+
+function platformFromUrl(value = "") {
+  const host = (() => {
+    try {
+      return new URL(value).hostname.toLowerCase();
+    } catch {
+      return "";
+    }
+  })();
+  if (host.includes("xiaohongshu")) return "xiaohongshu";
+  if (host.includes("douyin")) return "douyin";
+  if (host.includes("x.com") || host.includes("twitter.com")) return "x";
+  if (host.includes("weixin.qq.com") || host.includes("mp.weixin.qq.com")) return "wechat";
+  return "other";
+}
+
+function sourceForUrl(state, value = "") {
+  let host = "";
+  try {
+    host = new URL(value).hostname.toLowerCase();
+  } catch {
+    host = "";
+  }
+  if (!host) return null;
+  return (state.sources || []).find((source) => {
+    try {
+      return new URL(source.url).hostname.toLowerCase() === host;
+    } catch {
+      return false;
+    }
+  }) || null;
+}
+
+function parseLooseCapture(state, text) {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return parseDropFile("capture.json", trimmed);
+  }
+
+  const lines = trimmed.split(/\r?\n/);
+  const metadata = {};
+  const bodyLines = [];
+  for (const line of lines) {
+    const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
+    if (match && bodyLines.length === 0) {
+      metadata[match[1].toLowerCase()] = match[2].trim();
+      continue;
+    }
+    bodyLines.push(line);
+  }
+
+  const urls = [...trimmed.matchAll(/https?:\/\/[^\s<>"')]+/g)].map((match) => match[0]);
+  const primaryUrl = metadata.url || metadata.sourceurl || urls[0] || "";
+  const source = (state.sources || []).find((item) => item.id === (metadata.sourceid || "")) || sourceForUrl(state, primaryUrl);
+  const platform = metadata.platform || source?.platform || platformFromUrl(primaryUrl);
+  const contentLines = bodyLines
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^https?:\/\//.test(line));
+  const titleLine = contentLines.find((line) => line.length >= 4 && !/^(?:赞|点赞|喜欢|评论|转发|收藏|阅读|发布时间)\b/.test(line));
+  const title = metadata.title
+    || (titleLine?.match(/^(?:标题|题目)\s*[:：]\s*(.+)$/)?.[1] || "")
+    || titleLine
+    || "";
+  const engagementValue = trimmed.match(/(?:赞|点赞|喜欢|liked?)\s*[:：]?\s*([\d,.]+\s*(?:万|亿|[kK])?\+?)/i)?.[1]
+    || metadata.engagement
+    || null;
+  const noteLines = contentLines.filter((line) => line !== title);
+  const signals = urls.length || primaryUrl
+    ? [{
+        sourceId: source?.id || metadata.sourceId || "",
+        platform,
+        author: metadata.author || source?.account || source?.name || "",
+        title,
+        url: primaryUrl,
+        engagement: parseCount(engagementValue),
+        publishedAt: metadata.publishedat || metadata.date || "",
+        note: noteLines.join("\n") || metadata.note || "快速粘贴自动解析"
+      }]
+    : [];
+
+  const materials = [];
+  for (const line of contentLines) {
+    const comment = line.match(/^(?:热评|评论|高赞评论)\s*[:：]\s*(.+)$/);
+    if (comment) {
+      materials.push({
+        sourceUrl: primaryUrl,
+        platform,
+        author: metadata.author || source?.account || source?.name || "",
+        type: "hot-comment",
+        excerpt: comment[1],
+        whyValuable: "自动识别的热评，价值待人工确认",
+        possibleUse: "audience-language"
+      });
+      continue;
+    }
+    const mention = line.match(/^@([^：:]{1,30})[：:]\s*(.{4,})$/);
+    if (mention) {
+      materials.push({
+        sourceUrl: primaryUrl,
+        platform,
+        author: mention[1],
+        type: "hot-comment",
+        excerpt: mention[2],
+        whyValuable: "自动识别的用户评论，价值待人工确认",
+        possibleUse: "audience-language"
+      });
+    }
+  }
+
+  return { context: { sourceId: source?.id || "" }, signals, materials };
+}
+
+function normalizeDropRecords({ state, signals = [], materials = [], context = {} }) {
+  const normalizedSignals = [];
+  let invalidSignals = 0;
+  for (const record of signals) {
+    if (!record || typeof record !== "object") {
+      invalidSignals += 1;
+      continue;
+    }
+    const url = normalizeUrl(record.url);
+    if (!url) {
+      invalidSignals += 1;
+      continue;
+    }
+    const sourceId = record.sourceId || context.sourceId || "";
+    const source = (state.sources || []).find((item) => item.id === sourceId);
+    const engagement = parseCount(record.engagement);
+    normalizedSignals.push({
+      ...record,
+      sourceId: source ? source.id : "",
+      url,
+      platform: record.platform || source?.platform || context.platform || "other",
+      author: record.author || source?.account || source?.name || context.author || "",
+      engagement,
+      authorMedianEngagement: source?.authorMedianEngagement ?? null,
+      relativeMultiple: null,
+      automationTier: "needs-review",
+      capturedAt: record.capturedAt || now(),
+      seen: false,
+      disposition: "inbox",
+      note: record.note || "本地投递箱自动入库",
+      createdAt: record.createdAt || now(),
+      updatedAt: now()
+    });
+  }
+
+  const normalizedMaterials = [];
+  let invalidMaterials = 0;
+  for (const record of materials) {
+    if (!record || typeof record !== "object" || !String(record.excerpt || "").trim()) {
+      invalidMaterials += 1;
+      continue;
+    }
+    normalizedMaterials.push({
+      ...record,
+      sourceUrl: normalizeUrl(record.sourceUrl) || "",
+      platform: record.platform || context.platform || "other",
+      type: record.type || "opinion",
+      possibleUse: record.possibleUse || "evidence",
+      topicIds: Array.isArray(record.topicIds) ? record.topicIds : [],
+      createdAt: record.createdAt || now(),
+      updatedAt: now()
+    });
+  }
+
+  return { signals: normalizedSignals, materials: normalizedMaterials, invalidSignals, invalidMaterials };
+}
+
+async function archiveDropFile(fileName, targetDir) {
+  await fs.mkdir(targetDir, { recursive: true });
+  const source = path.join(dropDir, fileName);
+  const extension = path.extname(fileName);
+  const stem = path.basename(fileName, extension);
+  let target = path.join(targetDir, fileName);
+  try {
+    await fs.access(target);
+    target = path.join(targetDir, `${stem}-${Date.now()}${extension}`);
+  } catch {
+    // Target name is available.
+  }
+  await fs.rename(source, target);
+}
+
+async function runDropFolderScan(trigger = "automatic", allowDisabled = false) {
+  if (pipelineBusy) {
+    return { ok: true, skipped: true, reason: "another automation pipeline is running" };
+  }
+  pipelineBusy = true;
+
+  try {
+    const state = await readState();
+    if (!allowDisabled && !automationEnabled(state)) {
+      return { ok: true, skipped: true, reason: "automation is disabled" };
+    }
+
+    await Promise.all([fs.mkdir(dropDir, { recursive: true }), fs.mkdir(dropProcessedDir, { recursive: true }), fs.mkdir(dropFailedDir, { recursive: true })]);
+    const entries = await fs.readdir(dropDir, { withFileTypes: true });
+    const files = entries
+      .filter((entry) => entry.isFile() && dropExtensions.has(path.extname(entry.name).toLowerCase()))
+      .filter((entry) => entry.name.toLowerCase() !== "readme.md")
+      .map((entry) => entry.name)
+      .slice(0, 0 + 20);
+    const results = [];
+    let changed = false;
+
+    for (const fileName of files) {
+      const filePath = path.join(dropDir, fileName);
+      const run = {
+        id: id("run"),
+        sourceId: "local-drop",
+        status: "running",
+        trigger,
+        startedAt: now(),
+        finishedAt: "",
+        found: 0,
+        created: 0,
+        duplicates: 0,
+        failureReason: "",
+        nextAction: "",
+        fileName
+      };
+      state.collectionRuns.unshift(run);
+      changed = true;
+
+      try {
+        const stat = await fs.stat(filePath);
+        if (stat.size > 2 * 1024 * 1024) throw new Error("file exceeds 2 MB");
+        const text = await fs.readFile(filePath, "utf8");
+        state.rawSnapshots.unshift({
+          id: id("snapshot"),
+          runId: run.id,
+          sourceId: "local-drop",
+          url: `drop://${fileName}`,
+          capturedAt: now(),
+          format: `local-drop${path.extname(fileName).toLowerCase()}`,
+          content: text.slice(0, 500000)
+        });
+
+        const parsed = parseDropFile(fileName, text);
+        const normalized = normalizeDropRecords({ state, ...parsed });
+        if (!normalized.signals.length && !normalized.materials.length) {
+          throw new Error("drop file has no valid signal or material");
+        }
+        const signalTotals = importRecords(state, "signals", normalized.signals);
+        const materialTotals = importRecords(state, "materials", normalized.materials);
+        refreshEngagementMetrics(state);
+
+        run.found = normalized.signals.length + normalized.materials.length;
+        run.created = signalTotals.added + materialTotals.added;
+        run.duplicates = signalTotals.merged + materialTotals.merged;
+        run.status = run.created > 0 ? "ok" : "ok-no-new";
+        run.nextAction = run.created > 0 ? "到 Inbox / 素材库查看" : "无新增，已归档";
+        await writeState(state);
+        await archiveDropFile(fileName, dropProcessedDir);
+        results.push({ fileName, status: run.status, created: run.created, duplicates: run.duplicates, invalid: normalized.invalidSignals + normalized.invalidMaterials });
+      } catch (error) {
+        run.status = "failed";
+        run.failureReason = error.message;
+        run.nextAction = "查看 drops/failed 中的文件并修正格式";
+        await writeState(state);
+        try {
+          await archiveDropFile(fileName, dropFailedDir);
+        } catch (archiveError) {
+          run.failureReason += `; archive failed: ${archiveError.message}`;
+        }
+        results.push({ fileName, status: "failed", error: error.message });
+      }
+    }
+
+    changed = refreshMorningBrief(state) || changed;
+    if (changed) await writeState(state);
+    return {
+      ok: true,
+      scannedAt: now(),
+      total: results.length,
+      created: results.reduce((total, item) => total + (item.created || 0), 0),
+      failed: results.filter((item) => item.status === "failed").length,
+      results
+    };
+  } finally {
+    pipelineBusy = false;
+  }
+}
+
+async function runQuickCapture(text, preferredSourceId = "") {
+  if (pipelineBusy) {
+    return { ok: true, skipped: true, reason: "another automation pipeline is running" };
+  }
+  pipelineBusy = true;
+  try {
+    const state = await readState();
+    const parsed = parseLooseCapture(state, String(text || ""));
+    const preferredSource = (state.sources || []).find((source) => source.id === preferredSourceId);
+    if (preferredSource) {
+      parsed.context = {
+        ...parsed.context,
+        sourceId: preferredSource.id,
+        platform: preferredSource.platform,
+        author: preferredSource.account || preferredSource.name
+      };
+      parsed.signals = parsed.signals.map((signal) => ({
+        ...signal,
+        sourceId: signal.sourceId || preferredSource.id,
+        platform: signal.platform === "other" ? preferredSource.platform : signal.platform,
+        author: signal.author || preferredSource.account || preferredSource.name || ""
+      }));
+    }
+    const normalized = normalizeDropRecords({ state, ...parsed });
+    if (!normalized.signals.length && !normalized.materials.length) {
+      return { ok: false, error: "未识别到链接、信号或热评" };
+    }
+
+    const timestamp = now();
+    const run = {
+      id: id("run"),
+      sourceId: parsed.context.sourceId || "quick-capture",
+      status: "running",
+      trigger: "quick-capture",
+      startedAt: timestamp,
+      finishedAt: "",
+      found: normalized.signals.length + normalized.materials.length,
+      created: 0,
+      duplicates: 0,
+      failureReason: "",
+      nextAction: ""
+    };
+    state.collectionRuns.unshift(run);
+    state.rawSnapshots.unshift({
+      id: id("snapshot"),
+      runId: run.id,
+      sourceId: run.sourceId,
+      url: normalized.signals[0]?.url || normalized.materials[0]?.sourceUrl || "workbench://quick-capture",
+      capturedAt: timestamp,
+      format: "text",
+      content: String(text).slice(0, 500000)
+    });
+
+    const signalTotals = importRecords(state, "signals", normalized.signals);
+    const materialTotals = importRecords(state, "materials", normalized.materials);
+    refreshEngagementMetrics(state);
+    run.created = signalTotals.added + materialTotals.added;
+    run.duplicates = signalTotals.merged + materialTotals.merged;
+    run.status = "ok";
+    run.finishedAt = now();
+    run.nextAction = run.created > 0 ? "到 Inbox / 素材库查看" : "重复内容，未新增";
+    refreshMorningBrief(state);
+    await writeState(state);
+    return {
+      ok: true,
+      run,
+      signals: signalTotals,
+      materials: materialTotals,
+      invalid: normalized.invalidSignals + normalized.invalidMaterials
+    };
+  } finally {
+    pipelineBusy = false;
+  }
 }
 
 async function handleApi(request, response, pathname) {
@@ -698,6 +1445,19 @@ async function handleApi(request, response, pathname) {
     return sendJson(response, 200, { ok: true, settings: state.settings }, request);
   }
 
+  if (pathname === "/api/drop-folder/scan") {
+    const result = await runDropFolderScan("drop-folder-manual", true);
+    return sendJson(response, 200, result, request);
+  }
+
+  if (pathname === "/api/capture") {
+    if (!String(body.text || "").trim()) {
+      return sendJson(response, 400, { ok: false, error: "text is required" }, request);
+    }
+    const result = await runQuickCapture(body.text, body.sourceId);
+    return sendJson(response, result.ok ? 200 : 400, result, request);
+  }
+
   if (pathname === "/api/browser-capture") {
     try {
       const run = importBrowserCapture(state, body.sourceId, body.items);
@@ -744,6 +1504,7 @@ const server = http.createServer(async (request, response) => {
 server.listen(port, "127.0.0.1", () => {
   console.log(`Personal Content Workbench: http://127.0.0.1:${port}`);
   console.log(`Automation scheduler: ${["false", "0", "off"].includes(String(process.env.AUTOMATION_ENABLED || "").toLowerCase()) ? "disabled" : "enabled"}, tick ${automationTickMs}ms`);
+  console.log(`Drop folder scanner: ${dropDir}, scan ${dropScanMs}ms`);
 });
 
 const automationTimer = setInterval(() => {
@@ -752,4 +1513,13 @@ const automationTimer = setInterval(() => {
   });
 }, automationTickMs);
 
-server.on("close", () => clearInterval(automationTimer));
+const dropTimer = setInterval(() => {
+  runDropFolderScan("drop-folder", false).catch((error) => {
+    console.error(`Drop folder scan failed: ${error.message}`);
+  });
+}, dropScanMs);
+
+server.on("close", () => {
+  clearInterval(automationTimer);
+  clearInterval(dropTimer);
+});
