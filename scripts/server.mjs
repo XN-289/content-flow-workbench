@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appDir = path.join(root, "app");
@@ -11,14 +12,21 @@ const dataFile = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : p
 const dropDir = process.env.DROP_DIR ? path.resolve(process.env.DROP_DIR) : path.join(root, "drops");
 const dropProcessedDir = path.join(dropDir, "processed");
 const dropFailedDir = path.join(dropDir, "failed");
+const bridgeRoot = process.env.BRIDGE_ROOT ? path.resolve(process.env.BRIDGE_ROOT) : path.join(root, "bridge");
+const agentBridgeOutboxDir = path.join(bridgeRoot, "outbox");
 const port = Number(process.env.PORT || 5177);
 const automationTickMs = Math.max(1000, Number(process.env.AUTOMATION_TICK_MS || 60000));
 const dropScanMs = Math.max(1000, Number(process.env.DROP_SCAN_MS || 10000));
 const automaticMethods = new Set(["public-rss", "public-page"]);
 const dropExtensions = new Set([".json", ".md", ".txt"]);
 const runningSourceIds = new Set();
+const runningAgentTaskIds = new Set();
 let automationTickRunning = false;
 let pipelineBusy = false;
+
+const agentOptions = new Set(["grok", "muse", "codex", "claude", "cursor"]);
+const agentTaskKinds = new Set(["research", "dissect", "outline", "script", "title", "platform-copy", "visual"]);
+const localAgentRunners = new Set(["codex", "claude"]);
 
 const emptyState = () => ({
   version: 1,
@@ -28,7 +36,8 @@ const emptyState = () => ({
     morningBriefEnabled: true,
     inboxTime: "09:00",
     inboxDailyLimit: 10,
-    streakDefinition: ""
+    streakDefinition: "",
+    driveRoot: ""
   },
   sources: [],
   signals: [],
@@ -40,7 +49,8 @@ const emptyState = () => ({
   collectionRuns: [],
   rawSnapshots: [],
   morningBriefs: [],
-  frictionLog: []
+  frictionLog: [],
+  agentTasks: []
 });
 
 const contentTypes = {
@@ -55,7 +65,13 @@ async function readState() {
   try {
     const text = await fs.readFile(dataFile, "utf8");
     const parsed = JSON.parse(text);
-    const state = { ...emptyState(), ...parsed, settings: { ...emptyState().settings, ...(parsed.settings || {}) } };
+    const state = {
+      ...emptyState(),
+      ...parsed,
+      settings: { ...emptyState().settings, ...(parsed.settings || {}) },
+      agentTasks: Array.isArray(parsed.agentTasks) ? parsed.agentTasks : []
+    };
+    state.settings.driveRoot = String(state.settings.driveRoot || "").trim();
     refreshEngagementMetrics(state);
     prepareAutomationState(state);
     return state;
@@ -1478,6 +1494,364 @@ async function runQuickCapture(text, preferredSourceId = "") {
   }
 }
 
+function clipText(value, length = 900) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, length);
+}
+
+async function validateDriveRoot(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const resolved = path.resolve(trimmed);
+  if (!path.isAbsolute(resolved) || path.parse(resolved).root === resolved) {
+    throw new Error("Google Drive 目录必须是已存在的绝对目录，不能直接填盘符根目录");
+  }
+  const stat = await fs.stat(resolved).catch(() => null);
+  if (!stat?.isDirectory()) {
+    throw new Error("目录不存在。请先启动 Google Drive 桌面同步，再填写它的本地同步目录");
+  }
+  return resolved;
+}
+
+function driveTaskDir(driveRoot, taskId) {
+  return path.join(driveRoot, "ContentFlowWorkbench", "Outbox", taskId);
+}
+
+function buildAgentTaskContext(state, topicId = "") {
+  const topic = (state.topics || []).find((item) => item.id === topicId) || null;
+  const linkedMaterialIds = new Set(topic?.materialIds || []);
+  const linkedMaterials = (state.materials || []).filter((item) => linkedMaterialIds.has(item.id)).slice(0, 12);
+  const hotComments = (state.materials || []).filter((item) => item.type === "hot-comment" && !linkedMaterialIds.has(item.id)).slice(0, 8);
+  const evidenceMaterials = (state.materials || []).filter((item) => ["data", "case", "quote"].includes(item.type) && !linkedMaterialIds.has(item.id)).slice(0, 8);
+  const selectedMaterials = [...linkedMaterials, ...hotComments, ...evidenceMaterials]
+    .filter((item, index, list) => list.findIndex((other) => other.id === item.id) === index)
+    .slice(0, 20)
+    .map((item) => ({
+      id: item.id,
+      type: item.type,
+      author: item.author || "",
+      sourceUrl: item.sourceUrl || "",
+      excerpt: clipText(item.excerpt, 900),
+      whyValuable: clipText(item.whyValuable, 300),
+      citationNote: clipText(item.citationNote, 240)
+    }));
+
+  const linkedSignalIds = new Set(topic?.sourceSignalIds || []);
+  const linkedSignals = (state.signals || []).filter((item) => linkedSignalIds.has(item.id)).slice(0, 8);
+  const highPotentialSignals = (state.signals || [])
+    .filter((item) => item.automationTier === "high-potential" && !linkedSignalIds.has(item.id))
+    .slice(0, 5);
+  const selectedSignals = [...linkedSignals, ...highPotentialSignals]
+    .filter((item, index, list) => list.findIndex((other) => other.id === item.id) === index)
+    .slice(0, 12)
+    .map((item) => ({
+      id: item.id,
+      title: item.title || item.note || "",
+      author: item.author || "",
+      url: item.url || "",
+      engagement: item.engagement ?? null,
+      relativeMultiple: item.relativeMultiple ?? null,
+      dataPointCandidates: Array.isArray(item.dataPointCandidates) ? item.dataPointCandidates.slice(0, 5) : []
+    }));
+
+  const scripts = topic
+    ? (state.scripts || [])
+      .filter((item) => item.topicId === topic.id)
+      .slice(0, 3)
+      .map((item) => ({ id: item.id, versionNote: item.versionNote, inputSummary: clipText(item.inputSummary, 400), text: clipText(item.text, 1200) }))
+    : [];
+
+  const context = topic
+    ? {
+        topic: {
+          id: topic.id,
+          title: topic.title,
+          coreIdea: topic.coreIdea,
+          targetReader: topic.targetReader,
+          minimalPublishableVersion: topic.minimalPublishableVersion,
+          stage: topic.stage,
+          platforms: topic.platforms || []
+        },
+        materials: selectedMaterials,
+        signals: selectedSignals,
+        scripts
+      }
+    : {
+        materials: selectedMaterials,
+        signals: selectedSignals,
+        scripts: []
+      };
+
+  const digest = [
+    topic ? `选题：${topic.title}` : "任务未绑定选题",
+    `素材 ${selectedMaterials.length} 条`,
+    `信号 ${selectedSignals.length} 条`,
+    scripts.length ? `既有稿子版本 ${scripts.length} 个` : ""
+  ].filter(Boolean).join(" · ");
+  return { context, digest };
+}
+
+function agentTaskMarkdown(task, taskContext) {
+  const { context, digest } = taskContext;
+  return `# Agent Task: ${task.title}
+
+## 执行目标
+
+${task.objective}
+
+${task.outputRequirements ? `## 输出要求\n\n${task.outputRequirements}\n\n` : ""}## 当前工作台上下文
+
+${digest}
+
+\`\`\`json
+${JSON.stringify(context, null, 2)}
+\`\`\`
+
+## 输出协议
+
+1. 只输出最终结果正文，使用 Markdown。
+2. 不要编造来源、数字、时间范围和原文语境。
+3. 未核实的信息必须标注“待核对”；引用素材时保留来源链接。
+4. 结果由人保存为同目录 \`result.md\`，本地 Codex / Claude 启动脚本会自动完成这一步。
+5. 输出前自查：是否回答任务目标、是否有证据缺口、是否给出下一步人工动作。
+`;
+}
+
+function codexLauncherScript() {
+  return `$ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Set-Location -LiteralPath $PSScriptRoot
+$task = Get-Content -LiteralPath (Join-Path $PSScriptRoot "task.md") -Raw -Encoding UTF8
+$task | codex exec --sandbox read-only --ephemeral --output-last-message (Join-Path $PSScriptRoot "result.md") -
+`;
+}
+
+function claudeLauncherScript() {
+  return `$ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Set-Location -LiteralPath $PSScriptRoot
+$task = Get-Content -LiteralPath (Join-Path $PSScriptRoot "task.md") -Raw -Encoding UTF8
+$output = $task | claude -p --restricted --tools "" --output-format text --no-session-persistence
+Set-Content -LiteralPath (Join-Path $PSScriptRoot "result.md") -Value $output -Encoding UTF8
+`;
+}
+
+async function writeAgentTaskFiles(task, markdown, configuredDriveRoot = "") {
+  const taskDir = path.join(agentBridgeOutboxDir, task.id);
+  await fs.mkdir(taskDir, { recursive: true });
+  task.outboxPath = taskDir;
+  task.drivePath = "";
+  task.driveStatus = "not-configured";
+  if (configuredDriveRoot) {
+    const mirrorDir = driveTaskDir(configuredDriveRoot, task.id);
+    task.drivePath = mirrorDir;
+    task.driveStatus = "synced";
+  }
+  const files = {
+    "task.json": JSON.stringify(task, null, 2),
+    "task.md": markdown,
+    "result.md": ""
+  };
+  for (const [fileName, content] of Object.entries(files)) {
+    await fs.writeFile(path.join(taskDir, fileName), content, "utf8");
+  }
+  if (localAgentRunners.has(task.agent)) {
+    const launcher = task.agent === "codex" ? codexLauncherScript() : claudeLauncherScript();
+    await fs.writeFile(path.join(taskDir, `run-${task.agent}.ps1`), launcher, "utf8");
+  }
+
+  if (configuredDriveRoot) {
+    const mirrorDir = driveTaskDir(configuredDriveRoot, task.id);
+    await fs.mkdir(mirrorDir, { recursive: true });
+    for (const fileName of [...Object.keys(files), `run-${task.agent}.ps1`]) {
+      const source = path.join(taskDir, fileName);
+      if (await fs.stat(source).then(() => true).catch(() => false)) {
+        await fs.copyFile(source, path.join(mirrorDir, fileName));
+      }
+    }
+    task.drivePath = mirrorDir;
+    task.driveStatus = "synced";
+  }
+  return task;
+}
+
+async function createAgentTask(state, input = {}) {
+  const agent = String(input.agent || "").trim().toLowerCase();
+  const kind = String(input.kind || "").trim().toLowerCase();
+  const title = clipText(input.title, 120);
+  const objective = clipText(input.objective, 3000);
+  if (!agentOptions.has(agent)) throw new Error("unknown agent");
+  if (!agentTaskKinds.has(kind)) throw new Error("unknown task kind");
+  if (!title || !objective) throw new Error("title and objective are required");
+  const topicId = String(input.topicId || "").trim();
+  if (topicId && !(state.topics || []).some((topic) => topic.id === topicId)) throw new Error("topic not found");
+
+  const { context, digest } = buildAgentTaskContext(state, topicId);
+  const timestamp = now();
+  const task = {
+    id: id("agent"),
+    title,
+    agent,
+    kind,
+    topicId,
+    objective,
+    outputRequirements: clipText(input.outputRequirements, 2000),
+    contextDigest: digest,
+    status: "outbox",
+    outboxPath: "",
+    drivePath: "",
+    driveStatus: "not-configured",
+    prompt: "",
+    resultText: "",
+    resultHash: "",
+    resultImportedAt: "",
+    importedTarget: "",
+    lastError: "",
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+  const markdown = agentTaskMarkdown(task, { context, digest });
+  task.prompt = markdown;
+  await writeAgentTaskFiles(task, markdown, state.settings.driveRoot);
+  state.agentTasks.unshift(task);
+  return task;
+}
+
+async function latestAgentResult(task) {
+  const candidates = [];
+  for (const [key, directory] of [["local", task.outboxPath], ["drive", task.drivePath]]) {
+    if (!directory) continue;
+    const filePath = path.join(directory, "result.md");
+    const [stat, text] = await Promise.all([
+      fs.stat(filePath).catch(() => null),
+      fs.readFile(filePath, "utf8").catch(() => "")
+    ]);
+    if (stat?.isFile() && text.trim()) candidates.push({ key, filePath, text, modifiedAt: stat.mtimeMs });
+  }
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => b.modifiedAt - a.modifiedAt)[0];
+}
+
+async function scanAgentTaskResults(state, { persist = true } = {}) {
+  let changed = false;
+  for (const task of state.agentTasks || []) {
+    if (!["outbox", "running", "result-ready"].includes(task.status)) continue;
+    const result = await latestAgentResult(task);
+    if (!result) continue;
+    const hash = crypto.createHash("sha256").update(result.text).digest("hex");
+    if (task.resultHash === hash && task.resultText === result.text) continue;
+
+    if (result.key === "drive" && task.outboxPath) {
+      await fs.writeFile(path.join(task.outboxPath, "result.md"), result.text, "utf8");
+    } else if (result.key === "local" && task.drivePath) {
+      await fs.writeFile(path.join(task.drivePath, "result.md"), result.text, "utf8").catch(() => {
+        task.driveStatus = "sync-error";
+      });
+    }
+    task.resultText = result.text;
+    task.resultHash = hash;
+    task.status = "result-ready";
+    task.updatedAt = now();
+    changed = true;
+  }
+  if (changed && persist) await writeState(state);
+  return { ok: true, changed, readyCount: (state.agentTasks || []).filter((task) => task.status === "result-ready").length };
+}
+
+async function importAgentTaskResult(state, taskId) {
+  const task = (state.agentTasks || []).find((item) => item.id === taskId);
+  if (!task) throw new Error("agent task not found");
+  if (task.status === "imported") throw new Error("该任务结果已导入");
+  if (!String(task.resultText || "").trim()) {
+    await scanAgentTaskResults(state);
+    if (!String(task.resultText || "").trim()) throw new Error("result.md is empty");
+  }
+
+  const resultText = String(task.resultText).trim();
+  let target = "";
+  if (["outline", "script"].includes(task.kind)) {
+    importRecords(state, "scripts", [{
+      topicId: task.topicId,
+      tool: task.agent,
+      versionNote: `${task.title} · Agent 结果`,
+      inputSummary: task.contextDigest,
+      text: resultText
+    }]);
+    target = "scripts";
+    const topic = (state.topics || []).find((item) => item.id === task.topicId);
+    if (topic && ["topic", "outline"].includes(topic.stage)) topic.stage = "draft";
+  } else {
+    importRecords(state, "materials", [{
+      sourceUrl: `workbench://agent-task/${task.id}`,
+      platform: "other",
+      author: task.agent,
+      type: task.kind === "research" || task.kind === "dissect" ? "lead" : "opinion",
+      excerpt: resultText.slice(0, 50000),
+      whyValuable: `Agent 输出候选：${task.title}`,
+      possibleUse: task.kind === "title" ? "title" : task.kind === "visual" ? "case" : "evidence",
+      citationNote: "Agent 输出，发布前必须核对原始证据和来源链接",
+      topicIds: task.topicId ? [task.topicId] : []
+    }]);
+    target = "materials";
+  }
+  task.status = "imported";
+  task.resultImportedAt = now();
+  task.importedTarget = target;
+  task.updatedAt = now();
+  await writeState(state);
+  return { ok: true, target, task };
+}
+
+async function finishLocalAgentTask(taskId, code, errorMessage = "") {
+  try {
+    const state = await readState();
+    const task = state.agentTasks.find((item) => item.id === taskId);
+    if (!task || !runningAgentTaskIds.has(taskId)) return;
+    if (code === 0) {
+      await scanAgentTaskResults(state);
+      if (task.status !== "result-ready") {
+        task.status = "outbox";
+        task.lastError = "本机 Agent 已结束，但没有生成 result.md";
+        task.updatedAt = now();
+      }
+    } else {
+      task.status = "outbox";
+      task.lastError = errorMessage || `本机 Agent 退出码 ${code}`;
+      task.updatedAt = now();
+    }
+    await writeState(state);
+  } catch (error) {
+    console.error(`Agent task ${taskId} finish handling failed: ${error.message}`);
+  } finally {
+    runningAgentTaskIds.delete(taskId);
+  }
+}
+
+async function startLocalAgentTask(state, taskId) {
+  const task = (state.agentTasks || []).find((item) => item.id === taskId);
+  if (!task) throw new Error("agent task not found");
+  if (!localAgentRunners.has(task.agent)) throw new Error("只有 Codex 和 Claude 支持本机一键运行");
+  if (runningAgentTaskIds.has(taskId)) throw new Error("该 Agent 任务正在运行");
+  if (task.status === "imported") throw new Error("该任务结果已导入，请新建任务继续迭代");
+  const launcher = path.join(task.outboxPath || path.join(agentBridgeOutboxDir, taskId), `run-${task.agent}.ps1`);
+  await fs.access(launcher);
+  task.status = "running";
+  task.lastError = "";
+  task.localRunStartedAt = now();
+  task.updatedAt = now();
+  runningAgentTaskIds.add(taskId);
+  await writeState(state);
+  const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", launcher], {
+    cwd: path.dirname(launcher),
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.on("error", (error) => finishLocalAgentTask(taskId, 1, error.message));
+  child.on("exit", (code) => finishLocalAgentTask(taskId, code || 0));
+  child.unref();
+  return { ok: true, task };
+}
+
 async function handleApi(request, response, pathname) {
   if (request.method === "GET" && pathname === "/api/state") {
     return sendJson(response, 200, await readState(), request);
@@ -1567,6 +1941,49 @@ async function handleApi(request, response, pathname) {
     return sendJson(response, 200, { ok: true, settings: state.settings }, request);
   }
 
+  if (pathname === "/api/agent-bridge/settings") {
+    try {
+      state.settings.driveRoot = await validateDriveRoot(body.driveRoot);
+      await writeState(state);
+      return sendJson(response, 200, { ok: true, settings: state.settings }, request);
+    } catch (error) {
+      return sendJson(response, 400, { ok: false, error: error.message }, request);
+    }
+  }
+
+  if (pathname === "/api/agent-tasks/create") {
+    try {
+      const task = await createAgentTask(state, body);
+      await writeState(state);
+      return sendJson(response, 200, { ok: true, task }, request);
+    } catch (error) {
+      return sendJson(response, 400, { ok: false, error: error.message }, request);
+    }
+  }
+
+  if (pathname === "/api/agent-tasks/scan") {
+    const result = await scanAgentTaskResults(state);
+    return sendJson(response, 200, result, request);
+  }
+
+  if (pathname === "/api/agent-tasks/run") {
+    try {
+      const result = await startLocalAgentTask(state, body.id);
+      return sendJson(response, 200, result, request);
+    } catch (error) {
+      return sendJson(response, 400, { ok: false, error: error.message }, request);
+    }
+  }
+
+  if (pathname === "/api/agent-tasks/import") {
+    try {
+      const result = await importAgentTaskResult(state, body.id);
+      return sendJson(response, 200, result, request);
+    } catch (error) {
+      return sendJson(response, 400, { ok: false, error: error.message }, request);
+    }
+  }
+
   if (pathname === "/api/drop-folder/scan") {
     const result = await runDropFolderScan("drop-folder-manual", true);
     return sendJson(response, 200, result, request);
@@ -1641,7 +2058,14 @@ const dropTimer = setInterval(() => {
   });
 }, dropScanMs);
 
+const agentResultTimer = setInterval(() => {
+  readState().then((state) => scanAgentTaskResults(state)).catch((error) => {
+    console.error(`Agent result scan failed: ${error.message}`);
+  });
+}, dropScanMs);
+
 server.on("close", () => {
   clearInterval(automationTimer);
   clearInterval(dropTimer);
+  clearInterval(agentResultTimer);
 });

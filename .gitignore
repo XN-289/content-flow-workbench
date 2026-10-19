@@ -6,6 +6,8 @@ data/exports/
 data/raw/
 drops/*
 !drops/README.md
+bridge/*
+!bridge/README.md
 
 # Environment and runtime artifacts
 .env

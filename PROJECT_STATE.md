@@ -1,11 +1,11 @@
 # PROJECT_STATE
 
-Updated: 2026-10-19 13:35
+Updated: 2026-10-19 13:54
 Current phase: implementation
 
 ## 一句话现状
 
-已完成 Park 原型分析、North Star 路线图和第一版本地 MVP：工作台可通过 `npm start` 在本机运行，包含今日、账号、Inbox、素材、选题、生产、发布、复盘和采集运行九个视图；服务端已内置轻量自动调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面自动解析、正文全文 / 图片描述 / 数据口径候选抽取、多层身份去重、自动去重分级和每日晨报，并提供当前用户 Windows 登录常驻任务脚本。第一个真实小红书对标账号已入库，8 条笔记进入 Inbox，作者互动中位数和信号相对倍数已支持自动计算。仓库已补齐 README、TODO 和交接上下文，真实账号明细和素材只保存在本地主数据。
+已完成 Park 原型分析、North Star 路线图和第一版本地 MVP：工作台可通过 `npm start` 在本机运行，包含今日、账号、Inbox、素材、选题、生产、发布、复盘、采集和桥接十个视图；服务端已内置轻量自动调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面自动解析、正文全文 / 图片描述 / 数据口径候选抽取、多层身份去重、自动去重分级、每日晨报，以及 Grok / Muse / Codex / Claude / Cursor 的 Agent 任务包与结果回流。Google Drive 第一版通过桌面同步目录镜像，不做 OAuth。第一个真实小红书对标账号已入库，8 条笔记进入 Inbox，作者互动中位数和信号相对倍数已支持自动计算。仓库已补齐 README、TODO 和交接上下文，真实账号明细、素材与 Agent 任务内容只保存在本地或用户显式选择的同步目录。
 
 ## 已接受事实
 
@@ -33,6 +33,8 @@ Current phase: implementation
 - 公开页面自动解析已在临时数据验证：mock 页面自动生成 1 条公众号信号，第二次强制采集 `found 1 / created 0` — 本轮临时测试命令结果
 - 小红书同一内容 ID 在 `explore/:id` 与 `discovery/item/:id` 两种路径下已被识别为重复；多层身份去重修复后信号数量不再因同一条记录命中多个 key 而膨胀 — 本轮临时测试命令结果
 - 正文 / 图片 / 数据候选抽取已在临时服务验证：快速粘贴、公开页面和 RSS 均保存正文；公开页面提取图片描述；三类入口均生成数据口径候选；重复采集 `created 0 / duplicates 1` — 本轮 `tmp/extraction-live-test` 命令结果，测试数据不入 Git
+- 用户确认希望连接 Grok、Muse 等云端 Agent，使用本机 Codex、Claude、Cursor，并用 Google Drive 作为轻量协作空间 — 2026-10-19 用户需求
+- Agent 桥接不使用平台登录态、不保存云服务 API Key、不把 Agent 输出自动升级为已核实事实 — `decisions.md`、`docs/agent-bridge.md`
 
 ## 决策索引
 
@@ -57,6 +59,7 @@ Current phase: implementation
 - 2026-10-19 — 自动进料采用快速粘贴与多层身份去重 — `decisions.md`
 - 2026-10-19 — 本地常驻采用当前用户登录任务 — `decisions.md`
 - 2026-10-19 — 抽取结果只作为候选，不当作已核实事实 — `decisions.md`
+- 2026-10-19 — Agent 协作采用任务包与结果回流桥接 — `decisions.md`
 
 ## 已实现
 
@@ -77,6 +80,7 @@ Current phase: implementation
 - 快速粘贴与多层身份去重 — `scripts/server.mjs`、`app/app.js` — 支持直接粘贴 JSON / 普通文本，自动识别 URL、标题、平台、账号、点赞数和 `热评：` / `@评论者：` 素材；信号身份覆盖规范化 URL、平台内容 ID、平台 + 作者 + 标题、平台 + 标题 + 发布时间；临时数据验证通过
 - 公开页面自动解析 — `scripts/server.mjs` — 支持 Open Graph、JSON-LD Article、canonical、作者、发布时间、描述和同站链接提取，并自动生成 Inbox 信号；mock 页面重复采集验证通过
 - 正文与线索抽取 — `scripts/server.mjs`、`app/app.js`、`app/styles.css`、`data/import-template.json` — 支持 RSS 正文、公开页面正文、图片描述、数据口径候选、快速粘贴 / 本地文本正文保存；Inbox 展示拆解线索并可转数据素材；临时服务接口测试通过
+- Agent 桥接 — `scripts/server.mjs`、`app/app.js`、`bridge/README.md`、`docs/agent-bridge.md` — 支持七类任务、五个 Agent 目标、任务上下文打包、本地任务包、Google Drive 桌面同步镜像、Codex / Claude 本机脚本、双侧结果扫描与导入；临时服务已验证 Drive 回流、outline 导入 scripts、research 导入 materials、重复扫描不重复导入
 - Windows 登录常驻任务 — `scripts/install-startup-task.ps1`、`package.json` — `npm run setup-task` 为当前用户安装并启动本地服务任务，`npm run remove-task` 移除；PowerShell 语法检查通过，尚未在用户机器注册
 
 ## 已验收
@@ -92,6 +96,9 @@ Current phase: implementation
 - P1 — X 视频发布或跳过标准未确认 — 用户 — 阻塞可选平台决策 — 用户给出边界
 - P1 — 公众号文稿是视频发布后整理还是同步准备未确认 — 用户 — 阻塞生产排期 — 用户选择节奏
 - P1 — 采集书签尚未在第一个小红书对标主页人工验证 — 用户 — 不阻塞 Inbox 已有 8 条信号分流 — 用户手动滚动后点击书签，记录可见数量和新增数量
+- P1 — 真实 Google Drive 同步目录尚未配置 — 用户 — 不阻塞本地 bridge 使用 — 用户在桥接页填写桌面同步目录
+- P1 — Codex / Claude 真实选题任务尚未运行，Grok / Muse 手动回流尚未验证 — 用户 — 不阻塞代码交付 — 用户各跑一次真实任务并记录手感
+- P2 — Cursor 的标准打开方式尚未确认 — 用户 — 可先复制任务目录手动打开 — 用户确认常用入口后再评估增强
 
 ## 下一步
 
@@ -103,6 +110,7 @@ Current phase: implementation
 6. 补齐 10 条真实对标信号并复核自动作者互动中位数和相对倍数 — 当前已完成 8 条
 7. 沉淀 20 条素材或热评并手动完成 3 次拆解 — 验证素材字段和拆解模板是否够用
 8. 逐步补充公开 RSS / 公开页面信息源 — 用真实 L2 信源验证自动调度的日常稳定性
+9. 配置真实 Google Drive 同步目录，并用一个真实选题跑一次 Codex 或 Claude 任务 — 验证任务包、运行、扫描和导入闭环
 
 ## 恢复上下文
 
@@ -115,6 +123,7 @@ Current phase: implementation
 - 本地输入流程：`docs/local-input-workflow.md`
 - North Star 路线图：`docs/north-star-roadmap.md`
 - 小红书采集调研：`docs/xhs-collection-research.md`
+- Agent 桥接：`docs/agent-bridge.md`
 - 待办清单：`TODO.md`
 - 导入模板：`data/import-template.json`
 - 决策文件：`decisions.md`
@@ -134,3 +143,4 @@ Current phase: implementation
 - 2026-10-19 12:25 — 增加本地投递箱和自动晨报 — 采集后自动解析、去重、分级、归档和晨报汇总，受限平台仍不使用登录态或私有接口
 - 2026-10-19 12:47 — 增加快速粘贴、公开页面自动解析、四层身份去重和登录常驻任务脚本 — 自动进料从文件投递扩展到粘贴和公开页面，服务可按用户选择保持常驻
 - 2026-10-19 13:35 — 增加正文全文、图片描述和数据口径候选抽取 — Inbox 从标题摘要升级为可展开拆解线索，机器抽取保持候选定位，发布前仍需人工核对
+- 2026-10-19 13:54 — 增加 Agent 桥接、Google Drive 桌面同步镜像和结果回流 — Grok / Muse / Codex / Claude / Cursor 共享任务包协议，Agent 输出作为候选进入素材库或生产稿版本

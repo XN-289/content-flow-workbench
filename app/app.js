@@ -7,7 +7,8 @@ const navItems = [
   ["production", "生产"],
   ["publish", "发布"],
   ["review", "复盘"],
-  ["runs", "采集"]
+  ["runs", "采集"],
+  ["agents", "桥接"]
 ];
 
 const stageOrder = [
@@ -74,6 +75,31 @@ const automationTierLabels = {
   "worth-watching": "值得观察",
   normal: "常规",
   "needs-review": "待补数据"
+};
+
+const agentLabels = {
+  grok: "Grok",
+  muse: "Muse",
+  codex: "Codex",
+  claude: "Claude",
+  cursor: "Cursor"
+};
+
+const agentTaskKindLabels = {
+  research: "研究",
+  dissect: "拆解",
+  outline: "提纲",
+  script: "口播稿",
+  title: "标题",
+  "platform-copy": "平台文案",
+  visual: "视觉方案"
+};
+
+const agentTaskStatusLabels = {
+  outbox: "待处理",
+  running: "运行中",
+  "result-ready": "结果待导入",
+  imported: "已导入"
 };
 
 const triggerLabels = {
@@ -333,7 +359,8 @@ function render() {
     production: renderProduction,
     publish: renderPublish,
     review: renderReview,
-    runs: renderRuns
+    runs: renderRuns,
+    agents: renderAgents
   };
   viewEl.innerHTML = views[currentView]();
 }
@@ -913,6 +940,99 @@ function renderRuns() {
   `;
 }
 
+function agentTaskVariant(status) {
+  if (status === "running") return "info";
+  if (status === "result-ready") return "accent";
+  if (status === "imported") return "";
+  return "warn";
+}
+
+function renderAgents() {
+  const tasks = state.agentTasks || [];
+  const counts = {
+    outbox: tasks.filter((task) => task.status === "outbox").length,
+    running: tasks.filter((task) => task.status === "running").length,
+    ready: tasks.filter((task) => task.status === "result-ready").length,
+    imported: tasks.filter((task) => task.status === "imported").length
+  };
+  const driveConnected = Boolean(state.settings.driveRoot);
+
+  return `
+    <section class="page-head">
+      <div><h1 class="page-title">Agent 桥接</h1><p class="page-subtitle">任务包 · 云盘镜像 · 结果回流</p></div>
+      <div class="head-actions">
+        <button type="button" class="small-button" data-action="scan-agent-results">扫描结果</button>
+      </div>
+    </section>
+    <div class="metric-grid">
+      <div class="metric"><div class="metric-value">${counts.outbox}</div><div class="metric-label">待处理任务</div></div>
+      <div class="metric"><div class="metric-value">${counts.running}</div><div class="metric-label">本机运行中</div></div>
+      <div class="metric"><div class="metric-value">${counts.ready}</div><div class="metric-label">结果待导入</div></div>
+      <div class="metric"><div class="metric-value">${counts.imported}</div><div class="metric-label">已导入</div></div>
+    </div>
+    <div class="split">
+      <div>
+        <section class="panel">
+          <h2 class="panel-title">新建 Agent 任务</h2>
+          <form id="agent-task-form" class="form-grid">
+            <div class="field"><label>Agent</label><select name="agent">${Object.entries(agentLabels).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></div>
+            <div class="field"><label>任务类型</label><select name="kind">${Object.entries(agentTaskKindLabels).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></div>
+            <div class="field full"><label>选题</label><select name="topicId"><option value="">不绑定选题</option>${state.topics.map((topic) => `<option value="${escapeHtml(topic.id)}">${escapeHtml(topic.title)}</option>`).join("")}</select></div>
+            <div class="field full"><label>任务名</label><input name="title" required></div>
+            <div class="field full"><label>目标</label><textarea name="objective" required></textarea></div>
+            <div class="field full"><label>输出要求</label><textarea name="outputRequirements"></textarea></div>
+            <div class="form-actions"><button class="primary-button" type="submit">生成任务包</button></div>
+          </form>
+        </section>
+        <section class="panel">
+          <div class="item-head">
+            <h2 class="panel-title">Google Drive</h2>
+            ${tag(driveConnected ? "已连接" : "未连接", driveConnected ? "accent" : "warn")}
+          </div>
+          <form id="agent-drive-form" class="form-grid">
+            <div class="field full"><label>本地同步目录</label><input name="driveRoot" placeholder="C:\\Users\\you\\Google Drive" value="${escapeHtml(state.settings.driveRoot || "")}" required></div>
+            <div class="form-actions"><button class="primary-button" type="submit">保存连接</button></div>
+          </form>
+          <p class="panel-note">${driveConnected ? escapeHtml(state.settings.driveRoot) : "未配置时仅使用本地 bridge/"}</p>
+        </section>
+      </div>
+      <section class="panel">
+        <h2 class="panel-title">任务列表</h2>
+        <div class="list">
+          ${tasks.length ? tasks.map((task) => `
+            <article class="item-card">
+              <div class="item-head">
+                <h3 class="item-title">${escapeHtml(task.title)}</h3>
+                ${tag(agentTaskStatusLabels[task.status] || task.status, agentTaskVariant(task.status))}
+              </div>
+              <p class="item-body">${escapeHtml(task.objective)}</p>
+              <div class="item-meta">
+                ${tag(agentLabels[task.agent] || task.agent, "info")}
+                ${tag(agentTaskKindLabels[task.kind] || task.kind)}
+                ${tag(task.driveStatus === "synced" ? "Drive 已同步" : task.driveStatus === "not-configured" ? "仅本地" : task.driveStatus)}
+                ${task.topicId ? tag(topicById(task.topicId)?.title || "选题已删除") : tag("未绑选题")}
+              </div>
+              ${task.lastError ? `<p class="item-note danger-text">${escapeHtml(task.lastError)}</p>` : ""}
+              <details class="details">
+                <summary>上下文与结果</summary>
+                <p class="item-note">${escapeHtml(task.contextDigest)}</p>
+                ${task.resultText ? `<p class="extract-text">${escapeHtml(task.resultText)}</p>` : `<div class="empty">暂无结果</div>`}
+                <p class="mono item-note">${escapeHtml(task.outboxPath || "")}</p>
+              </details>
+              <div class="item-actions">
+                ${["codex", "claude"].includes(task.agent) && task.status === "outbox" ? `<button type="button" class="small-button accent" data-action="run-agent-task" data-id="${escapeHtml(task.id)}">本机运行</button>` : ""}
+                <button type="button" class="small-button" data-action="copy-agent-prompt" data-id="${escapeHtml(task.id)}">复制任务</button>
+                <button type="button" class="small-button" data-action="copy-agent-path" data-id="${escapeHtml(task.id)}">复制目录</button>
+                ${task.status === "result-ready" ? `<button type="button" class="small-button accent" data-action="import-agent-result" data-id="${escapeHtml(task.id)}">导入结果</button>` : ""}
+              </div>
+            </article>
+          `).join("") : `<div class="empty">暂无 Agent 任务</div>`}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
 async function saveRecord(type, record) {
   await api("/api/record", "POST", { type, record });
   await loadState();
@@ -1010,6 +1130,33 @@ document.addEventListener("click", async (event) => {
     } else if (action === "scan-drop-folder") {
       await api("/api/drop-folder/scan", "POST", {});
       await loadState();
+    } else if (action === "scan-agent-results") {
+      const result = await api("/api/agent-tasks/scan", "POST", {});
+      await loadState();
+      alert(`扫描完成：${result.changed ? "有新结果" : "暂无更新"}，当前待导入 ${result.readyCount} 条。`);
+    } else if (action === "run-agent-task") {
+      await api("/api/agent-tasks/run", "POST", { id: recordId });
+      await loadState();
+    } else if (action === "import-agent-result") {
+      const result = await api("/api/agent-tasks/import", "POST", { id: recordId });
+      await loadState();
+      alert(result.target === "scripts" ? "已导入生产稿版本。" : "已导入素材库。");
+    } else if (action === "copy-agent-prompt") {
+      const task = (state.agentTasks || []).find((item) => item.id === recordId);
+      if (!task?.prompt) throw new Error("任务 Prompt 不存在");
+      await navigator.clipboard.writeText(task.prompt);
+      button.textContent = "已复制";
+      setTimeout(() => {
+        button.textContent = "复制任务";
+      }, 1600);
+    } else if (action === "copy-agent-path") {
+      const task = (state.agentTasks || []).find((item) => item.id === recordId);
+      if (!task?.outboxPath) throw new Error("任务目录不存在");
+      await navigator.clipboard.writeText(task.outboxPath);
+      button.textContent = "目录已复制";
+      setTimeout(() => {
+        button.textContent = "复制目录";
+      }, 1600);
     } else if (action === "disposition") {
       await updateRecord("signals", recordId, { disposition: button.dataset.value, seen: true });
     } else if (action === "signal-material") {
@@ -1115,6 +1262,14 @@ document.addEventListener("submit", async (event) => {
       const result = await api("/api/browser-capture", "POST", { sourceId: data.sourceId, items });
       await loadState();
       alert(`采集完成：发现 ${result.run.found} 条，新增 ${result.run.created} 条。`);
+    } else if (form.id === "agent-task-form") {
+      const result = await api("/api/agent-tasks/create", "POST", formObject(form));
+      await loadState();
+      alert(`任务包已生成：${result.task.outboxPath}`);
+    } else if (form.id === "agent-drive-form") {
+      const data = formObject(form);
+      await api("/api/agent-bridge/settings", "POST", { driveRoot: data.driveRoot });
+      await loadState();
     } else if (form.id === "material-form") {
       await saveRecord("materials", { ...formObject(form), topicIds: [] });
     } else if (form.id === "topic-form") {

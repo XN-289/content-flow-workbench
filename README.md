@@ -73,6 +73,16 @@ npm run remove-task
 
 设计参考与边界见 [docs/automation-research.md](docs/automation-research.md)。
 
+## Agent 桥接与 Google Drive
+
+- 工作台新增“桥接”视图，可以把研究、拆解、提纲、口播稿、标题、平台文案和视觉方案打包成 Agent 任务。
+- 支持 Grok、Muse、Codex、Claude、Cursor 五类目标：Grok / Muse 复制任务后回写 `result.md`；Codex / Claude 支持本机一键运行；Cursor 通过任务目录接入。
+- Google Drive 第一版使用桌面同步目录，不保存 API Key、不做 OAuth。任务会镜像到 `<Drive>/ContentFlowWorkbench/Outbox/<task-id>/`。
+- 服务每 10 秒扫描本地和 Drive 侧结果，取较新的 `result.md`；提纲和口播稿导入生产稿版本，其他结果导入素材库。
+- Agent 输出永远是候选，引用、数字、时间和来源必须人工核对后才能进入发布链路。
+
+使用方式和隐私边界见 [docs/agent-bridge.md](docs/agent-bridge.md)。
+
 ## 数据与隐私
 
 - 主数据：`data/workbench.json`（本地生成，不进入 Git）
@@ -100,6 +110,7 @@ npm run remove-task
 | 小红书采集边界 | [docs/xhs-collection-research.md](docs/xhs-collection-research.md) |
 | 自动化调度设计 | [docs/automation-research.md](docs/automation-research.md) |
 | 日常输入流程 | [docs/local-input-workflow.md](docs/local-input-workflow.md) |
+| Agent 桥接 | [docs/agent-bridge.md](docs/agent-bridge.md) |
 | 决策记录 | [decisions.md](decisions.md) |
 
 ## 验证
