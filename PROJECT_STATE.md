@@ -1,17 +1,18 @@
 # PROJECT_STATE
 
-Updated: 2026-10-20 15:21
+Updated: 2026-10-20 15:35
 Current phase: implementation
 
 ## 一句话现状
 
-已完成 Park 原型分析、North Star 路线图和第一版本地 MVP：工作台可通过 `npm start` 在本机运行，主导航只保留总览 / 信息流 / 工作流 / 系统四个大类 tab，大类内连续排列模块且不设二级 tab；最终形态已确认为 Windows 单用户本地桌面应用，当前 localhost 服务只是先跑通真实流程的运行壳。服务端已内置轻量自动调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面自动解析、正文全文 / 图片描述 / 数据口径候选抽取、多层身份去重、自动去重分级、每日晨报，以及 Grok / Muse / Codex / Claude / Cursor 的 Agent 任务包与结果回流；signal / material / topic 已提供页面内轻量编辑表单，主数据支持变更前自动备份、内容哈希去重、保留 100 份、显式恢复、静态路径边界、请求体上限和更新字段白名单。备份存储已拆入独立模块，`server.mjs` 只保留恢复编排和服务组合。总览页并列提供今日动作、快速粘贴和生产焦点，信息流连续排列对标账号、Inbox 和素材，工作流连续排列选题、生产、发布和复盘，系统连续排列采集、Agent 和备份；Inbox 已提供清零漏斗、来源级推进率和未看计数。端到端链路已完成 4 视角对抗审查和 19 项临时数据回归，选题状态机、发布门槛、对象身份、Agent 任务锁、结果原子写入、备份恢复和分层证据包均已收紧。对标账号支持分享文案快速登记、可见范围重复采集去重和覆盖率留痕，重复登记不会重置已采集进度。外部项目调研已扩展到采集控制面、收藏归档、媒体下载、Agent 浏览器和平台特定导出方案；采集指挥中心和第一版分层证据包已实现，Inbox 可生成、重建、复制和人工核对证据包。Google Drive 第一版通过桌面同步目录显式镜像，不做 OAuth。第一个真实小红书对标账号已入库，8 条笔记进入 Inbox，作者互动中位数和信号相对倍数已支持自动计算。仓库已补齐 README、TODO 和交接上下文，真实账号明细、素材、备份与 Agent 任务内容只保存在本地或用户显式选择的同步目录。
+已完成 Park 原型分析、North Star 路线图和第一版本地 MVP：工作台可通过 `npm start` 在本机运行，主导航只保留总览 / 信息流 / 工作流 / 系统四个大类 tab，大类内连续排列模块且不设二级 tab；最终形态已确认为 Windows 单用户本地桌面应用，当前 localhost 服务只是先跑通真实流程的运行壳。服务端已内置轻量自动调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面自动解析、正文全文 / 图片描述 / 数据口径候选抽取、多层身份去重、自动去重分级、每日晨报，以及 Grok / Muse / Codex / Claude / Cursor 的 Agent 任务包与结果回流；signal / material / topic 已提供页面内轻量编辑表单，主数据支持变更前自动备份、内容哈希去重、保留 100 份、显式恢复、静态路径边界、请求体上限和更新字段白名单。备份存储已拆入独立模块，`server.mjs` 只保留恢复编排和服务组合。总览页并列提供今日动作、快速粘贴和生产焦点，信息流连续排列对标账号、Inbox 和素材，工作流连续排列选题、生产、发布和复盘，系统连续排列采集、Agent 和备份；Inbox 已提供清零漏斗、来源级推进率和未看计数。端到端链路已完成 4 视角对抗审查和 20 项临时数据回归，选题状态机、发布门槛、对象身份、Agent 任务锁、结果原子写入、备份恢复和分层证据包均已收紧。对标账号支持分享文案快速登记、可见范围重复采集去重和覆盖率留痕，重复登记不会重置已采集进度。外部项目调研已扩展到采集控制面、收藏归档、媒体下载、Agent 浏览器和平台特定导出方案；采集指挥中心、统一采集结果信封和第一版分层证据包已实现，Inbox 可生成、重建、复制和人工核对证据包。Google Drive 第一版通过桌面同步目录显式镜像，不做 OAuth。第一个真实小红书对标账号已入库，8 条笔记进入 Inbox，作者互动中位数和信号相对倍数已支持自动计算。仓库已补齐 README、TODO 和交接上下文，真实账号明细、素材、备份与 Agent 任务内容只保存在本地或用户显式选择的同步目录。
 
 本轮参考 Postiz、Mixpost 和 LangChain social-media-agent 后，工作台从“表单优先”转向“行动优先”：总览提供每日优先队列和 3 条作品目标进度，信息流提供节奏条，工作流提供阶段漏斗，发布台账提供平台队列；hash 返回 / 前进路由与系统页移动端横向溢出已修复。
 
 ## 已接受事实
 
 - 外部自动化调研完成：下一阶段优先补采集指挥中心、统一采集结果信封、平台能力矩阵、快照差异和轻量 doctor，不引入更激进的平台抓取器 — `docs/external-automation-research.md`
+- 统一采集结果信封已实现并通过临时数据回归：公开采集、浏览器辅助、本地投递箱和快速粘贴的运行记录均输出 `found / created / duplicates / blocked / failed / coverage / nextAction / cursor / error`，旧扁平字段保留兼容 — `scripts/collection-envelope.mjs`、`docs/collection-envelope.md`、`scripts/chain-regression.mjs`
 - 补充外部调研完成：ArchiveBox、Karakeep、linkding、SingleFile、yt-dlp、gallery-dl、Playwright / Playwright MCP、browser-use 及抖音、公众号、X 平台特定项目已纳入对比；可吸收的是分层证据包、幂等媒体归档、能力声明和可见范围导出，不吸收登录态批量抓取、身份池、代理、指纹伪装或验证码处理 — `docs/external-automation-research.md`
 - 第一版分层证据包已实现并通过临时数据回归：支持 `meta.json`、raw signal / snapshot、candidate excerpt、media manifest、SHA-256 清单、缺层标记、重复生成保留人工核对结论；真实证据保存在本地 `evidence/` 且不进 Git — `scripts/evidence-package.mjs`、`docs/evidence-package.md`、`scripts/chain-regression.mjs`
 - 当天 X 搜索 `from:xparkzz filter:videos` 可见 3 条相关视频，已分别下载、抽帧、OCR 并交叉分析 — `docs/park-prototype-analysis.md`
@@ -114,6 +115,7 @@ Current phase: implementation
 - 外部自动化项目调研 — `docs/external-automation-research.md` — 对比 MediaCrawler、catbus、creatorhub、changedetection.io、RSSHub、Huginn、n8n、Crawlee、Maxun、social-auto-upload、Beav、ArchiveBox、Karakeep、linkding、SingleFile、yt-dlp、gallery-dl、Playwright / Playwright MCP、browser-use 及抖音 / 公众号 / X 特定项目；形成采集指挥中心、结果信封、能力矩阵、证据包、可见范围导出、快照差异、doctor 与发布包路线
 
 - 采集指挥中心 — `scripts/server.mjs`、`app/app.js`、`app/styles.css`、`scripts/chain-regression.mjs` — 账号页按运行中、待人工、待补采、到期、失败、冷却、完成等状态输出行动队列，展示覆盖率、失败原因、最近运行摘要、书签 / 脚本 / 主页入口和下一步动作；无覆盖率旧数据也进入待补采，`node --check`、`npm run test:chain` 16 项回归通过
+- 统一采集结果信封 — `scripts/collection-envelope.mjs`、`scripts/server.mjs`、`docs/collection-envelope.md`、`scripts/chain-regression.mjs` — 单次运行和自动调度聚合均输出统一信封；快速粘贴、浏览器辅助、失败 RSS、投递箱 pending / 稳定入库已验证，`npm run test:chain` 20 项全部通过
 - 服务边界与更新白名单 — `scripts/server.mjs`、`scripts/chain-regression.mjs` — 静态路径用相对路径边界拒绝越界，请求体限制 2MB 并区分 400 / 413，`/api/update` 只允许页面可编辑字段，防止身份与内部运行态被覆盖；`node --check`、`npm run test:chain` 17 项回归通过
 - 备份存储模块 — `scripts/backup-store.mjs`、`scripts/server.mjs`、`scripts/chain-regression.mjs` — 备份读写、哈希去重、保留策略和格式校验移入独立模块，`server.mjs` 保留恢复编排；新增模块边界冒烟断言，`node --check` 与 `npm run test:chain` 17 项回归通过
 - Inbox 清零漏斗 — `scripts/inbox-funnel.mjs`、`scripts/server.mjs`、`app/app.js`、`app/styles.css`、`scripts/chain-regression.mjs` — 输出全局与来源级的待处理、已判断、已推进、推进率和未看计数；未关联来源归入快速收集；`node --check`、`npm run test:chain` 18 项回归、1440 / 390 视口无横向溢出和 5177 健康检查通过
@@ -208,4 +210,5 @@ Current phase: implementation
 - 2026-10-20 12:15 — 行动优先界面补齐直接跳转和摩擦反馈 — 总览行动队列可点击直达对应模块，复盘区显示近 3 天摩擦摘要；18 项链路回归与桌面 / 移动四视图检查通过；本轮改动进入本地 Git 提交
 - 2026-10-20 14:11 — 固化 UI 设计原则与验收门槛 — 明确四类 tab 信息架构、显式状态控件、明暗三态、可访问性、响应式和视觉语言；后续 UI 改动必须先过清单再提交
 - 2026-10-20 15:21 — 实现第一版分层证据包并完成 UI 可访问性收紧 — 证据目录包含结构化索引、原始信号 / 快照、候选摘录、媒体清单和哈希，人工核对说明改为字段内错误；链路回归扩展到 19 项且全部通过
+- 2026-10-20 15:35 — 实现统一采集结果信封 — 公开采集、浏览器辅助、本地投递箱和快速粘贴共用运行结果契约，链路回归扩展到 20 项且全部通过
 - 2026-10-20 14:22 — 收紧移动端顶栏密度 — 明暗切换与本地数据状态同排展示，主题按钮保持 44px 触控高度；390px 首屏不再被顶栏占掉一半

@@ -58,7 +58,7 @@
 - [x] 调研 MediaCrawler、catbus、creatorhub、changedetection.io、RSSHub、Crawlee、Maxun、social-auto-upload 等项目，形成采集控制面设计 — `docs/external-automation-research.md`。
 - [x] 补充调研 ArchiveBox、Karakeep、linkding、SingleFile、yt-dlp、gallery-dl、Playwright、browser-use 与平台特定导出项目，形成证据包和可见范围采集设计 — `docs/external-automation-research.md`。
 - [x] 建立采集指挥中心：源级待检查 / 待人工 / 待补采 / 冷却 / 失败 / 完成状态，直接给出下一步动作。
-- [ ] 统一采集结果信封：`found / created / duplicates / blocked / failed / coverage / nextAction / cursor / error`。
+- [x] 统一采集结果信封：`found / created / duplicates / blocked / failed / coverage / nextAction / cursor / error` — `scripts/collection-envelope.mjs`、`docs/collection-envelope.md`。
 - [ ] 建立平台能力矩阵：X、小红书、抖音、公众号分别支持列表、详情、评论、正文、媒体和登录边界。
 - [x] 建立证据包 / 归档包第一版：`meta.json`、raw signal / snapshot、candidate excerpt、media manifest、checksums 和人工核对状态；截图 / SingleFile 与媒体文件后续按需扩展，真实证据不进 Git — `scripts/evidence-package.mjs`。
 - [ ] 增加快照差异摘要：新增、重复、互动变化、疑似删除，并进入晨报。

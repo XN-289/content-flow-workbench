@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { createBackupStore } from "./backup-store.mjs";
+import { aggregateCollectionEnvelopes, collectionEnvelopeFromRun, finalizeCollectionRun } from "./collection-envelope.mjs";
 import { createEvidenceRuntime, createSignalEvidencePackage, verifyEvidencePackage } from "./evidence-package.mjs";
 import { inboxFunnelRuntime } from "./inbox-funnel.mjs";
 
@@ -356,8 +357,11 @@ function sourceControlRecord(state, source, timestamp = Date.now()) {
       found: latestRun.found || 0,
       created: latestRun.created || 0,
       duplicates: latestRun.duplicates || 0,
+      blocked: latestRun.blocked || 0,
+      failed: latestRun.failed || 0,
       failureReason: latestRun.failureReason || "",
-      nextAction: latestRun.nextAction || ""
+      nextAction: latestRun.nextAction || "",
+      envelope: collectionEnvelopeFromRun(latestRun)
     } : null
   };
 }
@@ -1049,6 +1053,7 @@ async function runCollection(state, sourceId, trigger = "manual") {
     failureReason: "",
     nextAction: ""
   };
+  finalizeCollectionRun(run);
   state.collectionRuns.unshift(run);
   source.automationStatus = isScheduledSource(source)
     ? (automaticMethods.has(source.collectionMethod) ? "running" : "manual-required")
@@ -1207,6 +1212,7 @@ async function runCollection(state, sourceId, trigger = "manual") {
         source.automationStatus = run.status === "blocked" ? "manual-required" : "scheduled";
       }
     }
+    finalizeCollectionRun(run);
   }
 
   return run;
@@ -1231,6 +1237,7 @@ async function runAutomationTick(force = false) {
 
     const candidates = state.sources.filter((source) => (force ? isScheduledSource(source) : isDue(source)));
     const results = [];
+    const runs = [];
     for (const source of candidates) {
       if (runningSourceIds.has(source.id)) {
         results.push({ sourceId: source.id, source: source.name || source.account || source.id, status: "skipped", reason: "already running" });
@@ -1239,14 +1246,19 @@ async function runAutomationTick(force = false) {
 
       const run = await collectWithLock(state, source.id, force ? "force" : "automatic");
       if (run) {
+        runs.push(run);
         results.push({
           sourceId: source.id,
           source: source.name || source.account || source.id,
           status: run.status,
           found: run.found,
           created: run.created,
+          duplicates: run.duplicates,
+          blocked: run.blocked,
+          failed: run.failed,
           failureReason: run.failureReason,
-          nextAction: run.nextAction
+          nextAction: run.nextAction,
+          cursor: run.cursor
         });
       }
     }
@@ -1266,6 +1278,7 @@ async function runAutomationTick(force = false) {
       blocked: results.filter((item) => item.status === "blocked").length,
       failed: results.filter((item) => item.status === "failed").length,
       skipped: results.filter((item) => item.status === "skipped").length,
+      envelope: aggregateCollectionEnvelopes(runs),
       results
     };
   } finally {
@@ -1326,6 +1339,7 @@ function importBrowserCapture(state, sourceId, items, context = {}) {
     failureReason: "",
     nextAction: ""
   };
+  finalizeCollectionRun(run);
   state.collectionRuns.unshift(run);
   state.rawSnapshots.unshift({
     id: id("snapshot"),
@@ -1397,6 +1411,7 @@ function importBrowserCapture(state, sourceId, items, context = {}) {
     updatedAt: run.finishedAt
   };
   refreshEngagementMetrics(state);
+  finalizeCollectionRun(run);
   return run;
 }
 
@@ -1834,7 +1849,7 @@ async function runDropFolderScan(trigger = "automatic", allowDisabled = false) {
       const fingerprint = `${statBefore.size}:${statBefore.mtimeMs}`;
       if (dropFileStability.get(fileName) !== fingerprint) {
         dropFileStability.set(fileName, fingerprint);
-        state.collectionRuns.unshift({
+        const pendingRun = {
           id: id("run"),
           sourceId: "local-drop",
           status: "pending",
@@ -1847,7 +1862,9 @@ async function runDropFolderScan(trigger = "automatic", allowDisabled = false) {
           failureReason: "file is still changing",
           nextAction: "等待文件写入稳定后自动重试",
           fileName
-        });
+        };
+        finalizeCollectionRun(pendingRun);
+        state.collectionRuns.unshift(pendingRun);
         changed = true;
         await writeState(state);
         results.push({ fileName, status: "pending", error: "file is still changing" });
@@ -1868,6 +1885,7 @@ async function runDropFolderScan(trigger = "automatic", allowDisabled = false) {
         nextAction: "",
         fileName
       };
+      finalizeCollectionRun(run);
       state.collectionRuns.unshift(run);
       changed = true;
 
@@ -1881,6 +1899,7 @@ async function runDropFolderScan(trigger = "automatic", allowDisabled = false) {
           run.status = "pending";
           run.failureReason = "file changed while being read";
           run.nextAction = "等待文件写入稳定后自动重试";
+          finalizeCollectionRun(run);
           await writeState(state);
           results.push({ fileName, status: "pending", error: run.failureReason });
           continue;
@@ -1909,6 +1928,7 @@ async function runDropFolderScan(trigger = "automatic", allowDisabled = false) {
         run.duplicates = signalTotals.merged + materialTotals.merged;
         run.status = run.created > 0 ? "ok" : "ok-no-new";
         run.nextAction = run.created > 0 ? "到 Inbox / 素材库查看" : "无新增，已归档";
+        finalizeCollectionRun(run);
         await writeState(state);
         await archiveDropFile(fileName, dropProcessedDir);
         results.push({ fileName, status: run.status, created: run.created, duplicates: run.duplicates, invalid: normalized.invalidSignals + normalized.invalidMaterials });
@@ -1916,6 +1936,7 @@ async function runDropFolderScan(trigger = "automatic", allowDisabled = false) {
         run.status = "failed";
         run.failureReason = error.message;
         run.nextAction = "查看 drops/failed 中的文件并修正格式";
+        finalizeCollectionRun(run);
         await writeState(state);
         try {
           await archiveDropFile(fileName, dropFailedDir);
@@ -1978,6 +1999,7 @@ async function runQuickCapture(text, preferredSourceId = "") {
       failureReason: "",
       nextAction: ""
     };
+    finalizeCollectionRun(run);
     state.collectionRuns.unshift(run);
     state.rawSnapshots.unshift({
       id: id("snapshot"),
@@ -1997,6 +2019,7 @@ async function runQuickCapture(text, preferredSourceId = "") {
     run.status = "ok";
     run.finishedAt = now();
     run.nextAction = run.created > 0 ? "到 Inbox / 素材库查看" : "重复内容，未新增";
+    finalizeCollectionRun(run);
     refreshMorningBrief(state);
     await writeState(state);
     return {

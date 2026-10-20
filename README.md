@@ -72,6 +72,7 @@ npm run remove-task
 - 每日 / 每周任务按 `settings.collectionTime` 排程；按需和仅研究任务不自动执行。
 - 失败使用 5 分钟起步的指数退避，最长 6 小时；成功后失败计数清零。
 - 同一账号不会并发采集。
+- 每次采集运行都有统一结果信封：`found / created / duplicates / blocked / failed / coverage / nextAction / cursor / error`，公开采集、浏览器辅助、投递箱和快速粘贴共用同一口径；契约见 [docs/collection-envelope.md](docs/collection-envelope.md)。
 - 账号页和采集页会显示下次运行时间、待人工、失败次数和最后错误。
 - 页面可暂停 / 恢复自动化；也可以用环境变量 `AUTOMATION_ENABLED=false` 强制关闭。
 - 投递箱目录和扫描间隔可用 `DROP_DIR`、`DROP_SCAN_MS` 覆盖，单文件最大 2 MB。
@@ -117,6 +118,7 @@ npm run remove-task
 | Park 原型分析 | [docs/park-prototype-analysis.md](docs/park-prototype-analysis.md) |
 | 小红书采集边界 | [docs/xhs-collection-research.md](docs/xhs-collection-research.md) |
 | 自动化调度设计 | [docs/automation-research.md](docs/automation-research.md) |
+| 采集结果信封 | [docs/collection-envelope.md](docs/collection-envelope.md) |
 | 外部自动化项目调研 | [docs/external-automation-research.md](docs/external-automation-research.md) |
 | 分层证据包标准 | [docs/evidence-package.md](docs/evidence-package.md) |
 | 日常输入流程 | [docs/local-input-workflow.md](docs/local-input-workflow.md) |

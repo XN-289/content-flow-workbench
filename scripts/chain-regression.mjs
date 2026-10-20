@@ -255,6 +255,16 @@ async function main() {
   equal(quickFunnel.total, 1, "quick capture funnel total count");
   pass("Inbox 清零漏斗能区分待处理、已推进和来源推送率");
 
+  const quickCapture = (await api(base, "/api/capture", {
+    text: "https://example.com/first?utm_source=test"
+  })).run;
+  equal(quickCapture.envelope.found, 1, "quick capture envelope found count");
+  equal(quickCapture.envelope.created, 0, "quick capture envelope created count");
+  equal(quickCapture.envelope.duplicates, 1, "quick capture envelope duplicate count");
+  equal(quickCapture.envelope.failed, 0, "quick capture envelope failed count");
+  equal(quickCapture.envelope.nextAction, "重复内容，未新增", "quick capture envelope next action");
+  pass("快速粘贴返回统一采集结果信封");
+
   const lifecycleTopic = await addTopic(base, "Lifecycle topic", {
     coreIdea: "人工核心观点",
     stage: "published",
@@ -466,6 +476,11 @@ async function main() {
   equal(firstCapture.collectedCount, 3, "first visible capture collected count");
   equal(firstCapture.coveragePercent, 60, "first visible capture coverage percent");
   equal(firstCapture.coverageStatus, "partial", "first visible capture coverage status");
+  equal(firstCapture.envelope.found, 3, "browser capture envelope found count");
+  equal(firstCapture.envelope.created, 3, "browser capture envelope created count");
+  equal(firstCapture.envelope.duplicates, 0, "browser capture envelope duplicate count");
+  equal(firstCapture.envelope.coverage.collectedCount, 3, "browser capture envelope coverage count");
+  equal(firstCapture.envelope.coverage.status, "partial", "browser capture envelope coverage status");
   current = await state(base);
   const firstCommand = current.runtime.commandCenter.records.find((record) => record.sourceId === xhsSource.id);
   equal(firstCommand.controlStatus, "backfill", "command center status after partial capture");
@@ -549,6 +564,9 @@ async function main() {
   const htmlFeedSource = current.sources.find((source) => source.name === "HTML feed");
   const htmlRun = (await api(base, "/api/collect", { sourceId: htmlFeedSource.id })).run;
   equal(htmlRun.status, "failed", "HTML response collection status");
+  equal(htmlRun.envelope.failed, 1, "failed collection envelope failed flag");
+  equal(htmlRun.envelope.found, 0, "failed collection envelope found count");
+  equal(htmlRun.envelope.error, htmlRun.failureReason, "failed collection envelope error");
   match(htmlRun.failureReason, /RSS \/ Atom/, "HTML response failure reason");
   equal((await state(base)).signals.length, 6, "signal count after HTML feed");
   current = await state(base);
@@ -565,9 +583,17 @@ async function main() {
   }), "utf8");
   const firstScan = await api(base, "/api/drop-folder/scan", {});
   equal(firstScan.results[0].status, "pending", "first drop scan status");
+  current = await state(base);
+  const pendingDropRun = current.collectionRuns.find((run) => run.fileName === "half-write.json" && run.status === "pending");
+  equal(pendingDropRun.envelope.failed, 0, "pending drop envelope failed flag");
+  equal(pendingDropRun.envelope.nextAction, "等待文件写入稳定后自动重试", "pending drop envelope next action");
   const secondScan = await api(base, "/api/drop-folder/scan", {});
   equal(secondScan.results[0].status, "ok", "second drop scan status");
   equal(secondScan.results[0].created, 1, "second drop scan created count");
+  current = await state(base);
+  const stableDropRun = current.collectionRuns.find((run) => run.fileName === "half-write.json" && run.status === "ok");
+  equal(stableDropRun.envelope.created, 1, "stable drop envelope created count");
+  equal(stableDropRun.envelope.failed, 0, "stable drop envelope failed flag");
   truthy(await fs.stat(path.join(dropDir, "processed", "half-write.json")), "archived drop file");
   current = await state(base);
   truthy(current.signals.some((signal) => signal.url === "https://example.com/drop-signal"), "drop signal imported");
