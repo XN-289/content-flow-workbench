@@ -244,6 +244,13 @@ async function main() {
   equal(current.signals[0].seen, true, "signal seen after duplicate import");
   equal(current.signals[0].note, "人工判断保留", "protected signal note");
   pass("重复导入信号不打回 Inbox，并保留人工判断");
+  const quickFunnel = current.runtime.inbox.sources.find((source) => source.sourceId === "quick-capture");
+  equal(current.runtime.inbox.total, 1, "inbox funnel total count");
+  equal(current.runtime.inbox.pending, 0, "inbox funnel pending count");
+  equal(current.runtime.inbox.actionable, 1, "inbox funnel actionable count");
+  equal(current.runtime.inbox.pushRate, 100, "inbox funnel push rate");
+  equal(quickFunnel.total, 1, "quick capture funnel total count");
+  pass("Inbox 清零漏斗能区分待处理、已推进和来源推送率");
 
   const lifecycleTopic = await addTopic(base, "Lifecycle topic", {
     coreIdea: "人工核心观点",
@@ -560,7 +567,44 @@ async function main() {
   truthy(appJs.includes("function renderBackups"), "backup view renderer");
   truthy(appJs.includes("function renderCommandCenter"), "command center renderer");
   truthy(appJs.includes("commandCoverageText"), "command center coverage helper");
-  pass("工作台页面、采集书签 helper、记录编辑与备份视图冒烟通过");
+  truthy(appJs.includes("const navItems"), "primary tab navigation definition");
+  truthy(appJs.includes('["overview", "总览"]'), "overview primary tab");
+  truthy(appJs.includes('["flow", "信息流"]'), "information flow primary tab");
+  truthy(appJs.includes('["workflow", "工作流"]'), "workflow primary tab");
+  truthy(appJs.includes('["system", "系统"]'), "system primary tab");
+  truthy(!appJs.includes('["today", "今日"]'), "no former today child tab");
+  truthy(!appJs.includes('["sources", "账号"]'), "no former sources child tab");
+  truthy(appJs.includes("function renderInformationFlow"), "information flow combined renderer");
+  truthy(appJs.includes("function renderWorkflowWorkspace"), "workflow combined renderer");
+  truthy(appJs.includes("function renderSystemWorkspace"), "system combined renderer");
+  truthy(appJs.includes("function renderFlowRhythm"), "information flow rhythm renderer");
+  truthy(appJs.includes("function dailyPriorityQueue"), "daily priority queue renderer");
+  truthy(appJs.includes("function renderWorkflowPipeline"), "workflow pipeline renderer");
+  truthy(appJs.includes("function renderPublishBoard"), "publish board renderer");
+  truthy(appJs.includes("function comparePublications"), "publish queue sorting helper");
+  truthy(appJs.includes("function recentFrictionLog") && appJs.includes("function renderFrictionSummary"), "three-day friction summary helper");
+  truthy(appJs.includes("function viewFromLocationHash"), "primary tab deep-link helper");
+  truthy(appJs.includes("async function activateView"), "primary tab activation helper");
+  truthy(appJs.includes('window.addEventListener("hashchange"'), "primary tab hash-change handler");
+  const todayRenderer = appJs.slice(
+    appJs.indexOf("function renderToday"),
+    appJs.indexOf("function renderSources")
+  );
+  truthy(todayRenderer.includes('id="quick-capture"'), "today quick capture placement");
+  truthy(todayRenderer.includes("sprint-progress"), "today sprint progress placement");
+  truthy(todayRenderer.includes("priority-list"), "today priority queue placement");
+  truthy(todayRenderer.includes('class="priority-action"') && todayRenderer.includes('data-action="nav"'), "today priority actions navigate directly");
+  truthy(!todayRenderer.includes('id="friction-form"'), "today friction form separation");
+  const reviewRenderer = appJs.slice(
+    appJs.indexOf("function renderReview"),
+    appJs.indexOf("function renderRuns")
+  );
+  truthy(reviewRenderer.includes('id="friction-form"'), "review friction form placement");
+  truthy(reviewRenderer.includes("${renderFrictionSummary()}"), "three-day friction summary placement");
+  const serverJs = await fs.readFile(path.join(repoRoot, "scripts/server.mjs"), "utf8");
+  truthy(serverJs.includes('from "./backup-store.mjs"'), "backup store module import");
+  equal((serverJs.match(/async function createBackup/g) || []).length, 0, "server-local backup writer count");
+  pass("工作台页面、信息架构、采集书签 helper、记录编辑、备份视图与备份模块边界冒烟通过");
 
   // A persisted task lock must survive a server restart and prevent duplicate detached Agent runs.
   await stopProcess(workbenchProcess);

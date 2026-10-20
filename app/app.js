@@ -1,15 +1,8 @@
 const navItems = [
-  ["today", "今日"],
-  ["sources", "账号"],
-  ["inbox", "Inbox"],
-  ["materials", "素材"],
-  ["topics", "选题"],
-  ["production", "生产"],
-  ["publish", "发布"],
-  ["review", "复盘"],
-  ["runs", "采集"],
-  ["agents", "桥接"],
-  ["backups", "备份"]
+  ["overview", "总览"],
+  ["flow", "信息流"],
+  ["workflow", "工作流"],
+  ["system", "系统"]
 ];
 
 const stageOrder = [
@@ -41,6 +34,25 @@ const platformLabels = {
   wechat: "公众号",
   other: "其他"
 };
+
+const publicationStatusLabels = {
+  "not-ready": "未准备",
+  manual: "待人工",
+  published: "已发",
+  failed: "失败",
+  skipped: "跳过"
+};
+
+const publicationStatusVariants = {
+  "not-ready": "",
+  manual: "warn",
+  published: "accent",
+  failed: "danger",
+  skipped: ""
+};
+
+const publicationPlatforms = ["douyin", "xiaohongshu", "wechat", "x"];
+const publicationStatusOrder = ["not-ready", "manual", "failed", "skipped", "published"];
 
 const methodLabels = {
   manual: "手动导入",
@@ -185,7 +197,7 @@ const gateLabels = {
 };
 
 let state = null;
-let currentView = "today";
+let currentView = viewFromLocationHash();
 let inboxFilter = "inbox";
 let materialQuery = "";
 let backups = null;
@@ -203,6 +215,11 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function viewFromLocationHash() {
+  const value = decodeURIComponent(window.location.hash.slice(1));
+  return navItems.some(([key]) => key === value) ? value : "overview";
 }
 
 async function api(path, method = "GET", body = null) {
@@ -227,6 +244,14 @@ function renderNav() {
   appNav.innerHTML = navItems.map(([key, label]) => (
     `<button type="button" class="nav-button ${currentView === key ? "active" : ""}" data-action="nav" data-view="${key}">${label}</button>`
   )).join("");
+}
+
+async function activateView(targetView) {
+  if (!navItems.some(([key]) => key === targetView)) return;
+  currentView = targetView;
+  renderNav();
+  render();
+  if (currentView === "system") await loadBackups();
 }
 
 function sourceById(id) {
@@ -539,35 +564,150 @@ function topicDefaults(record = {}) {
 
 function render() {
   const views = {
-    today: renderToday,
-    sources: renderSources,
-    inbox: renderInbox,
-    materials: renderMaterials,
-    topics: renderTopics,
-    production: renderProduction,
-    publish: renderPublish,
-    review: renderReview,
-    runs: renderRuns,
-    agents: renderAgents,
-    backups: renderBackups
+    overview: renderToday,
+    flow: renderInformationFlow,
+    workflow: renderWorkflowWorkspace,
+    system: renderSystemWorkspace
   };
   viewEl.innerHTML = views[currentView]();
 }
 
+function renderInformationFlow() {
+  return `
+    <section class="page-head">
+      <div><h1 class="page-title">信息流</h1><p class="page-subtitle">对标账号 · Inbox 清零 · 素材沉淀</p></div>
+    </section>
+    ${renderFlowRhythm()}
+    <div class="category-stack">
+      <div class="category-section" id="flow-sources">${renderSources()}</div>
+      <div class="category-section" id="flow-inbox">${renderInbox()}</div>
+      <div class="category-section" id="flow-materials">${renderMaterials()}</div>
+    </div>
+  `;
+}
+
+function renderWorkflowWorkspace() {
+  return `
+    <section class="page-head">
+      <div><h1 class="page-title">工作流</h1><p class="page-subtitle">选题 · 生产 · 发布 · 复盘</p></div>
+    </section>
+    ${renderWorkflowPipeline()}
+    <div class="category-stack">
+      <div class="category-section" id="workflow-topics">${renderTopics()}</div>
+      <div class="category-section" id="workflow-production">${renderProduction()}</div>
+      <div class="category-section" id="workflow-publish">${renderPublish()}</div>
+      <div class="category-section" id="workflow-review">${renderReview()}</div>
+    </div>
+  `;
+}
+
+function renderSystemWorkspace() {
+  return `
+    <section class="page-head">
+      <div><h1 class="page-title">系统</h1><p class="page-subtitle">采集运行 · Agent 桥接 · 本地备份</p></div>
+    </section>
+    <div class="category-stack">
+      <div class="category-section" id="system-runs">${renderRuns()}</div>
+      <div class="category-section" id="system-agents">${renderAgents()}</div>
+      <div class="category-section" id="system-backups">${renderBackups()}</div>
+    </div>
+  `;
+}
+
+function renderFlowRhythm() {
+  const dueCount = state.sources.filter(isDueSource).length;
+  const manualCount = state.sources.filter((source) => source.automationStatus === "manual-required").length;
+  const inbox = state.runtime?.inbox;
+  const pendingCount = inbox?.pending ?? state.signals.filter((signal) => signal.disposition === "inbox").length;
+  const pushRate = inbox?.pushRate;
+  const materialCount = state.materials.length;
+  const hotCommentCount = state.materials.filter((material) => material.kind === "hot-comment").length;
+
+  return `
+    <section class="flow-rhythm" aria-label="信息流状态">
+      <article>
+        <span>进料</span>
+        <strong>${dueCount}</strong>
+        <small>${manualCount ? `${manualCount} 个账号待人工` : "无人工阻塞"}</small>
+      </article>
+      <article>
+        <span>Inbox</span>
+        <strong>${pendingCount}</strong>
+        <small>${pushRate === null || pushRate === undefined ? "推进率待判断" : `推进率 ${pushRate}%`}</small>
+      </article>
+      <article>
+        <span>素材沉淀</span>
+        <strong>${materialCount}</strong>
+        <small>热评 ${hotCommentCount}</small>
+      </article>
+    </section>
+  `;
+}
+
+function dailyPriorityQueue() {
+  const manualActionCount = state.sources.filter((source) => source.automationStatus === "manual-required").length;
+  const inboxCount = state.runtime?.inbox?.pending ?? state.signals.filter((signal) => signal.disposition === "inbox").length;
+  const producingCount = state.topics.filter((topic) => ["outline", "draft", "production", "review"].includes(topic.stage)).length;
+  const readyCount = state.topics.filter((topic) => topic.stage === "ready-to-publish").length;
+  const queue = [];
+
+  if (manualActionCount) queue.push({ label: "处理采集账号", detail: `${manualActionCount} 个账号需要人工动作`, view: "flow", anchor: "flow-sources", count: manualActionCount });
+  if (inboxCount) queue.push({ label: "清 Inbox", detail: `${inboxCount} 条信号待判断`, view: "flow", anchor: "flow-inbox", count: inboxCount });
+  if (producingCount) queue.push({ label: "推进生产", detail: `${producingCount} 个选题正在生产`, view: "workflow", anchor: "workflow-production", count: producingCount });
+  if (readyCount) queue.push({ label: "处理发布", detail: `${readyCount} 个选题待发布`, view: "workflow", anchor: "workflow-publish", count: readyCount });
+  if (!queue.length) queue.push({ label: "补一个新选题", detail: "当前没有阻塞和生产任务", view: "workflow", anchor: "workflow-topics", count: null });
+  return queue.slice(0, 3);
+}
+
+function renderWorkflowPipeline() {
+  const groups = [
+    { label: "选题", stages: ["topic"], anchor: "workflow-topics" },
+    { label: "提纲 / 草稿", stages: ["outline", "draft"], anchor: "workflow-production" },
+    { label: "制作 / 待审", stages: ["production", "review"], anchor: "workflow-production" },
+    { label: "待发", stages: ["ready-to-publish"], anchor: "workflow-publish" },
+    { label: "发布 / 复盘", stages: ["published", "reviewed"], anchor: "workflow-review" }
+  ].map((group) => ({
+    ...group,
+    count: state.topics.filter((topic) => group.stages.includes(topic.stage)).length
+  }));
+  const activeGroup = groups.find((group) => group.count > 0 && group.label !== "发布 / 复盘");
+  const total = state.topics.length;
+
+  return `
+    <section class="panel workflow-pipeline" aria-label="工作流阶段">
+      <div class="item-head">
+        <div>
+          <h2 class="panel-title">阶段漏斗</h2>
+          <p class="panel-note">${activeGroup ? `当前重心：${activeGroup.label} · ${activeGroup.count} 个` : total ? "当前批次已进入收尾" : "还没有选题"}</p>
+        </div>
+        ${tag(`选题 ${total}`, "info")}
+      </div>
+      <div class="pipeline-track">
+        ${groups.map((group) => `
+          <button type="button" data-action="nav" data-view="workflow" data-anchor="${group.anchor}">
+            <span>${group.label}</span>
+            <strong>${group.count}</strong>
+          </button>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderToday() {
-  const inboxCount = state.signals.filter((signal) => signal.disposition === "inbox").length;
-  const highPotentialCount = state.signals.filter((signal) => signal.disposition === "inbox" && signal.automationTier === "high-potential").length;
+  const inbox = state.runtime?.inbox;
+  const inboxCount = inbox?.pending ?? state.signals.filter((signal) => signal.disposition === "inbox").length;
   const manualActionCount = state.sources.filter((source) => source.automationStatus === "manual-required").length;
   const producing = state.topics.filter((topic) => ["outline", "draft", "production", "review"].includes(topic.stage)).length;
   const ready = state.topics.filter((topic) => topic.stage === "ready-to-publish").length;
-  const published = state.publications.filter((item) => item.status === "published").length;
+  const completedWorks = state.topics.filter((topic) => ["published", "reviewed"].includes(topic.stage)).length;
+  const sprintTarget = 3;
+  const sprintPercent = Math.min(100, Math.round((completedWorks / sprintTarget) * 100));
+  const priorities = dailyPriorityQueue();
   const focusTopics = state.topics
     .filter((topic) => !["published", "reviewed"].includes(topic.stage))
-    .slice(0, 5);
+    .slice(0, 3);
   const brief = latestDailyBrief();
-  const briefSignals = brief
-    ? brief.topSignalIds.map((signalId) => state.signals.find((signal) => signal.id === signalId)).filter(Boolean)
-    : [];
 
   return `
     <section class="page-head">
@@ -578,89 +718,68 @@ function renderToday() {
     </section>
     <div class="metric-grid">
       <div class="metric"><div class="metric-value">${inboxCount}</div><div class="metric-label">待处理信号</div></div>
-      <div class="metric"><div class="metric-value">${highPotentialCount}</div><div class="metric-label">高潜力信号</div></div>
       <div class="metric"><div class="metric-value">${manualActionCount}</div><div class="metric-label">待人工账号</div></div>
       <div class="metric"><div class="metric-value">${producing}</div><div class="metric-label">生产中</div></div>
       <div class="metric"><div class="metric-value">${ready}</div><div class="metric-label">待发布</div></div>
-      <div class="metric"><div class="metric-value">${published}</div><div class="metric-label">已发布记录</div></div>
     </div>
-    <div class="split">
-      <div>
-        <section class="panel">
-          <div class="item-head">
-            <h2 class="panel-title">晨报</h2>
-            ${brief ? tag(displayDate(brief.generatedAt), "accent") : tag("等待生成", "warn")}
-          </div>
-          <div class="list">
-            ${brief ? `
-              <article class="item-card">
-                <div class="item-meta">
-                  ${brief.nextActions.map((action) => tag(action, "accent")).join("")}
-                </div>
-              </article>
-              ${briefSignals.length ? briefSignals.map((signal) => `
-                <article class="item-card">
-                  <div class="item-head">
-                    <h3 class="item-title">${escapeHtml(signal.title || signal.note || "未命名信号")}</h3>
-                    ${tag(automationTierLabels[signal.automationTier] || "待补数据", signal.automationTier === "high-potential" ? "accent" : "warn")}
-                  </div>
-                  <div class="item-meta">
-                    ${tag(platformLabels[signal.platform] || signal.platform, "info")}
-                    ${tag(`互动 ${signal.engagement ?? "未填"}`)}
-                    ${signal.relativeMultiple !== null && signal.relativeMultiple !== undefined ? tag(`${signal.relativeMultiple}x`, "accent") : ""}
-                  </div>
-                </article>
-              `).join("") : `<div class="empty">暂无待处理信号</div>`}
-            ` : `<div class="empty">到达 Inbox 时间后自动生成</div>`}
-          </div>
-        </section>
-        <section class="panel">
-          <h2 class="panel-title">快速粘贴</h2>
-          <form id="quick-capture" class="form-grid">
-            <div class="field full"><label>来源账号</label><select name="sourceId">${sourceOptions()}</select></div>
-            <div class="field full"><label>粘贴原文</label><textarea name="text" rows="7" required placeholder="直接粘贴链接、标题、点赞数、热评或 JSON。系统会自动识别 URL、账号、互动数和热评。"></textarea></div>
-            <div class="form-actions"><button class="primary-button" type="submit">自动解析入库</button></div>
-          </form>
-          <p class="panel-note">支持“热评： ...”“@评论者： ...”和 JSON。识别结果仍先进 Inbox / 素材库，不自动替你判断价值。</p>
-        </section>
-        <section class="panel">
-          <h2 class="panel-title">摩擦记录</h2>
-          <form id="friction-form" class="form-grid">
-            <div class="field full"><label>卡点</label><input name="stuckAt" required></div>
-            <div class="field"><label>耗时</label><input name="minutes" type="number" min="0"></div>
-            <div class="field"><label>可模板化</label><select name="templateCandidate"><option value="false">否</option><option value="true">是</option></select></div>
-            <div class="field full"><label>备注</label><textarea name="note"></textarea></div>
-            <div class="form-actions"><button class="primary-button" type="submit">记录</button></div>
-          </form>
-        </section>
-      </div>
-      <div>
-        <section class="panel">
-          <h2 class="panel-title">今日焦点</h2>
-          <div class="list">
-            ${focusTopics.length ? focusTopics.map((topic) => `
-              <article class="item-card">
-                <div class="item-head">
-                  <h3 class="item-title">${escapeHtml(topic.title)}</h3>
-                  ${tag(stageLabels[topic.stage] || topic.stage, "accent")}
-                </div>
-                <p class="item-body">${escapeHtml(topic.coreIdea || "核心观点待补")}</p>
-              </article>
-            `).join("") : `<div class="empty">暂无生产中选题</div>`}
-          </div>
-        </section>
-        <section class="panel">
-          <h2 class="panel-title">最近摩擦</h2>
-          <div class="list">
-            ${state.frictionLog.slice(0, 3).map((item) => `
-              <article class="item-card">
-                <div class="item-head"><h3 class="item-title">${escapeHtml(item.stuckAt)}</h3>${tag(`${item.minutes || 0} 分钟`, "warn")}</div>
-                ${item.note ? `<p class="item-note">${escapeHtml(item.note)}</p>` : ""}
-              </article>
-            `).join("") || `<div class="empty">暂无记录</div>`}
-          </div>
-        </section>
-      </div>
+    <div class="today-layout">
+      <section class="panel">
+        <div class="item-head">
+          <h2 class="panel-title">今日动作</h2>
+          ${brief ? tag(displayDate(brief.generatedAt), "accent") : ""}
+        </div>
+        <div class="sprint-progress">
+          <div><span>作品目标</span><strong>${completedWorks}/${sprintTarget}</strong></div>
+          <div class="progress-track" role="img" aria-label="作品目标完成度 ${sprintPercent}%"><span style="width:${sprintPercent}%"></span></div>
+        </div>
+        <ol class="priority-list">
+          ${priorities.map((item, index) => `
+            <li>
+              <span>${["现在", "接着", "稍后"][index]}</span>
+              <button
+                type="button"
+                class="priority-action"
+                data-action="nav"
+                data-view="${item.view}"
+                data-anchor="${item.anchor}"
+              >
+                <strong>${escapeHtml(item.label)}</strong>
+                <small>${escapeHtml(item.detail)}</small>
+              </button>
+            </li>
+          `).join("")}
+        </ol>
+        <div class="today-actions">
+          <button type="button" data-action="nav" data-view="flow" data-anchor="flow-inbox"><span>清 Inbox</span><strong>${inboxCount}</strong></button>
+          <button type="button" data-action="nav" data-view="flow" data-anchor="flow-sources"><span>处理账号</span><strong>${manualActionCount}</strong></button>
+          <button type="button" data-action="nav" data-view="workflow" data-anchor="workflow-production"><span>推进生产</span><strong>${producing}</strong></button>
+          <button type="button" data-action="nav" data-view="workflow" data-anchor="workflow-publish"><span>处理发布</span><strong>${ready}</strong></button>
+        </div>
+        ${brief?.nextActions?.length ? `<div class="item-meta">${brief.nextActions.slice(0, 3).map((action) => tag(action, "accent")).join("")}</div>` : ""}
+      </section>
+      <section class="panel">
+        <h2 class="panel-title">快速粘贴</h2>
+        <form id="quick-capture" class="form-grid">
+          <div class="field full"><label>来源账号</label><select name="sourceId">${sourceOptions()}</select></div>
+          <div class="field full"><label>粘贴原文</label><textarea name="text" rows="8" required placeholder="链接、标题、点赞数、热评或 JSON"></textarea></div>
+          <div class="form-actions"><button class="primary-button" type="submit">解析入库</button></div>
+        </form>
+        <p class="panel-note">识别结果先进 Inbox / 素材库，不自动替你判断价值。</p>
+      </section>
+      <section class="panel">
+        <h2 class="panel-title">生产焦点</h2>
+        <div class="list">
+          ${focusTopics.length ? focusTopics.map((topic) => `
+            <article class="item-card">
+              <div class="item-head">
+                <h3 class="item-title">${escapeHtml(topic.title)}</h3>
+                ${tag(stageLabels[topic.stage] || topic.stage, "accent")}
+              </div>
+              <p class="item-body">${escapeHtml(topic.coreIdea || "核心观点待补")}</p>
+            </article>
+          `).join("") : `<div class="empty">暂无生产中选题</div>`}
+        </div>
+      </section>
     </div>
   `;
 }
@@ -675,10 +794,10 @@ function renderSources() {
   const automationLabel = envDisabled ? "环境变量强制关" : effectiveAutomation ? "开" : "关";
 
   return `
-    <section class="page-head">
+    <section class="section-head">
       <div>
-        <h1 class="page-title">对标账号</h1>
-        <p class="page-subtitle">账号注册表 · 自动化${automationLabel} · 到期 ${dueCount} · 重试 ${retryingCount}</p>
+        <h2 class="section-title">对标账号</h2>
+        <p class="section-subtitle">账号注册表 · 自动化${automationLabel} · 到期 ${dueCount} · 重试 ${retryingCount}</p>
       </div>
       <div class="head-actions">
         <button type="button" class="small-button accent" data-action="run-automation">检查到期采集</button>
@@ -797,26 +916,62 @@ function renderSources() {
 }
 
 function renderInbox() {
+  const funnel = state.runtime?.inbox;
   const filtered = state.signals.filter((signal) => {
     if (inboxFilter === "inbox") return signal.disposition === "inbox";
     if (inboxFilter === "unseen") return !signal.seen;
     return signal.disposition === inboxFilter;
   });
   const filters = [["inbox", "待处理"], ["unseen", "未看"], ["watch", "观察"], ["dissect", "拆解"], ["discard", "丢弃"]];
+  const filterCounts = {
+    inbox: funnel?.pending ?? 0,
+    unseen: funnel?.unseenCount ?? state.signals.filter((signal) => !signal.seen).length,
+    watch: funnel?.counts?.watch ?? 0,
+    dissect: funnel?.counts?.dissect ?? 0,
+    discard: funnel?.counts?.discard ?? 0
+  };
   const visibleSignals = [...filtered].sort((a, b) => (
     signalStrength(b) - signalStrength(a)
     || signalTime(b) - signalTime(a)
     || String(a.title || "").localeCompare(String(b.title || ""), "zh-CN")
   ));
+  const sourceRecords = (funnel?.sources || [])
+    .filter((record) => record.total > 0)
+    .slice(0, 8);
 
   return `
-    <section class="page-head">
+    <section class="section-head">
       <div>
-        <h1 class="page-title">Inbox</h1>
-        <p class="page-subtitle">每条信号必须有去向</p>
+        <h2 class="section-title">Inbox</h2>
+        <p class="section-subtitle">每条信号必须有去向</p>
       </div>
     </section>
-    <div class="filter-row">${filters.map(([value, label]) => `<button type="button" class="small-button ${inboxFilter === value ? "accent" : ""}" data-action="filter-inbox" data-value="${value}">${label}</button>`).join("")}</div>
+    <div class="metric-grid">
+      <div class="metric"><div class="metric-value">${funnel?.pending ?? 0}</div><div class="metric-label">待处理信号</div></div>
+      <div class="metric"><div class="metric-value">${funnel?.decided ?? 0}</div><div class="metric-label">已判断信号</div></div>
+      <div class="metric"><div class="metric-value">${funnel?.actionable ?? 0}</div><div class="metric-label">已推进信号</div></div>
+      <div class="metric"><div class="metric-value">${funnel?.pushRate === null || funnel?.pushRate === undefined ? "--" : `${funnel.pushRate}%`}</div><div class="metric-label">推进率</div></div>
+    </div>
+    <div class="filter-row">${filters.map(([value, label]) => `<button type="button" class="small-button ${inboxFilter === value ? "accent" : ""}" data-action="filter-inbox" data-value="${value}">${label} ${filterCounts[value] ?? 0}</button>`).join("")}</div>
+    ${sourceRecords.length ? `
+      <section class="panel inbox-funnel-panel">
+        <h2 class="panel-title">来源清零质量</h2>
+        <p class="panel-note">推进率 = 已判断信号里进入观察、拆解、素材、选题或生产的比例。</p>
+        <div class="source-funnel-list">
+          ${sourceRecords.map((record) => `
+            <div class="source-funnel-row">
+              <div class="source-funnel-name">${escapeHtml(record.name)}</div>
+              <div class="source-funnel-stats">
+                ${tag(`待处理 ${record.pending}`, record.pending ? "warn" : "accent")}
+                ${tag(`已判断 ${record.decided}`)}
+                ${tag(`已推进 ${record.actionable}`, record.actionable ? "accent" : "")}
+                ${tag(record.pushRate === null || record.pushRate === undefined ? "待判断" : `推进率 ${record.pushRate}%`)}
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+    ` : ""}
     <div class="list">
       ${visibleSignals.length ? visibleSignals.map((signal) => {
         const source = sourceById(signal.sourceId);
@@ -894,12 +1049,17 @@ function renderInbox() {
             <div class="item-actions">
               <button type="button" class="small-button" data-action="save-signal" data-id="${escapeHtml(signal.id)}">保存数据</button>
               <button type="button" class="small-button" data-action="disposition" data-id="${escapeHtml(signal.id)}" data-value="dissect">拆解</button>
-              <button type="button" class="small-button" data-action="signal-material" data-id="${escapeHtml(signal.id)}">入素材</button>
-              <button type="button" class="small-button" data-action="signal-topic" data-id="${escapeHtml(signal.id)}">入选题</button>
-              <button type="button" class="small-button accent" data-action="signal-produce" data-id="${escapeHtml(signal.id)}">直接生产</button>
               <button type="button" class="small-button" data-action="disposition" data-id="${escapeHtml(signal.id)}" data-value="watch">观察</button>
               <button type="button" class="danger-button" data-action="disposition" data-id="${escapeHtml(signal.id)}" data-value="discard">丢弃</button>
             </div>
+            <details class="details workflow-transition">
+              <summary>转入工作流</summary>
+              <div class="item-actions">
+                <button type="button" class="small-button" data-action="signal-material" data-id="${escapeHtml(signal.id)}">入素材</button>
+                <button type="button" class="small-button" data-action="signal-topic" data-id="${escapeHtml(signal.id)}">入选题</button>
+                <button type="button" class="small-button accent" data-action="signal-produce" data-id="${escapeHtml(signal.id)}">直接生产</button>
+              </div>
+            </details>
           </article>
         `;
       }).join("") : `<div class="empty">当前筛选无信号</div>`}
@@ -916,10 +1076,10 @@ function renderMaterials() {
   });
 
   return `
-    <section class="page-head">
+    <section class="section-head">
       <div>
-        <h1 class="page-title">素材与热评</h1>
-        <p class="page-subtitle">观点 · 案例 · 数据 · 金句 · 热评</p>
+        <h2 class="section-title">素材与热评</h2>
+        <p class="section-subtitle">观点 · 案例 · 数据 · 金句 · 热评</p>
       </div>
       <input class="search-input" id="material-search" placeholder="搜索素材" value="${escapeHtml(materialQuery)}">
     </section>
@@ -991,8 +1151,8 @@ function renderMaterials() {
 
 function renderTopics() {
   return `
-    <section class="page-head">
-      <div><h1 class="page-title">选题池</h1><p class="page-subtitle">目标读者 · 核心观点 · 最小版本</p></div>
+    <section class="section-head">
+      <div><h2 class="section-title">选题池</h2><p class="section-subtitle">目标读者 · 核心观点 · 最小版本</p></div>
     </section>
     <div class="split">
       <section class="panel">
@@ -1048,7 +1208,7 @@ function renderChecks(topic, kind, labels) {
 function renderProduction() {
   const topics = state.topics.filter((topic) => !["published", "reviewed"].includes(topic.stage));
   return `
-    <section class="page-head"><div><h1 class="page-title">生产台</h1><p class="page-subtitle">七项检查 · 四个人工关卡</p></div></section>
+    <section class="section-head"><div><h2 class="section-title">生产台</h2><p class="section-subtitle">七项检查 · 四个人工关卡</p></div></section>
     <div class="split">
       <div>
         <section class="panel">
@@ -1095,7 +1255,8 @@ function renderProduction() {
 
 function renderPublish() {
   return `
-    <section class="page-head"><div><h1 class="page-title">发布台账</h1><p class="page-subtitle">平台逐列追踪</p></div></section>
+    <section class="section-head"><div><h2 class="section-title">发布台账</h2><p class="section-subtitle">平台逐列追踪</p></div></section>
+    ${renderPublishBoard()}
     <div class="split">
       <section class="panel">
         <h2 class="panel-title">添加发布记录</h2>
@@ -1113,12 +1274,12 @@ function renderPublish() {
       <section class="panel">
         <h2 class="panel-title">平台状态</h2>
         <div class="list">
-          ${state.publications.length ? state.publications.map((item) => {
+          ${state.publications.length ? [...state.publications].sort(comparePublications).map((item) => {
             const topic = topicById(item.topicId);
             return `
               <article class="item-card">
                 <div class="item-head"><h3 class="item-title">${escapeHtml(topic?.title || "未关联选题")}</h3>${tag(platformLabels[item.platform] || item.platform, "info")}</div>
-                <div class="item-meta">${tag(item.status || "not-ready", item.status === "published" ? "accent" : item.status === "failed" ? "danger" : "warn")}${tag(displayDate(item.publishedAt))}</div>
+                <div class="item-meta">${tag(publicationStatusLabels[item.status || "not-ready"] || item.status, publicationStatusVariants[item.status || "not-ready"] || "")}${tag(displayDate(item.publishedAt))}</div>
                 ${item.failureReason ? `<p class="item-note">${escapeHtml(item.failureReason)}</p>` : ""}
                 ${item.nextAction ? `<p class="item-note">下一步：${escapeHtml(item.nextAction)}</p>` : ""}
               </article>
@@ -1130,9 +1291,53 @@ function renderPublish() {
   `;
 }
 
+function comparePublications(a, b) {
+  const rank = (item) => publicationStatusOrder.indexOf(item.status || "not-ready");
+  return rank(a) - rank(b)
+    || new Date(b.publishedAt || 0).getTime() - new Date(a.publishedAt || 0).getTime();
+}
+
+function renderPublishBoard() {
+  const rows = publicationPlatforms.map((platform) => {
+    const records = state.publications.filter((item) => item.platform === platform);
+    const published = records.filter((item) => item.status === "published").length;
+    const blocked = records.filter((item) => ["manual", "failed"].includes(item.status)).length;
+    const percent = records.length ? Math.round((published / records.length) * 100) : 0;
+    const statusTags = publicationStatusOrder
+      .map((status) => ({ status, count: records.filter((item) => (item.status || "not-ready") === status).length }))
+      .filter((entry) => entry.count > 0)
+      .map((entry) => tag(`${publicationStatusLabels[entry.status]} ${entry.count}`, publicationStatusVariants[entry.status] || ""))
+      .join("");
+
+    return `
+      <div class="publish-row">
+        <div class="publish-platform">
+          <strong>${platformLabels[platform]}</strong>
+          <small>${records.length ? `记录 ${records.length}` : "未建记录"}</small>
+        </div>
+        <div class="publish-status">${statusTags || tag("未建记录")}</div>
+        <div class="publish-progress">
+          <div class="progress-track" role="img" aria-label="${platformLabels[platform]}发布完成度 ${percent}%"><span style="width:${percent}%"></span></div>
+          <small>${records.length ? `${percent}%` : "--"}</small>
+        </div>
+        ${blocked ? tag(`阻塞 ${blocked}`, "danger") : ""}
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <section class="panel publish-board" aria-label="平台队列">
+      <div class="item-head">
+        <div><h2 class="panel-title">平台队列</h2><p class="panel-note">先看阻塞，再看各平台缺口</p></div>
+      </div>
+      ${rows}
+    </section>
+  `;
+}
+
 function renderReview() {
   return `
-    <section class="page-head"><div><h1 class="page-title">复盘</h1><p class="page-subtitle">数据 · 评论 · 下一条改法</p></div></section>
+    <section class="section-head"><div><h2 class="section-title">复盘</h2><p class="section-subtitle">数据 · 评论 · 下一条改法</p></div></section>
     <div class="split">
       <section class="panel">
         <h2 class="panel-title">添加复盘</h2>
@@ -1149,6 +1354,17 @@ function renderReview() {
           <div class="form-actions"><button class="primary-button" type="submit">保存复盘</button></div>
         </form>
       </section>
+      <section class="panel">
+        <h2 class="panel-title">摩擦记录</h2>
+        <form id="friction-form" class="form-grid">
+          <div class="field full"><label>卡点</label><input name="stuckAt" required></div>
+          <div class="field"><label>耗时</label><input name="minutes" type="number" min="0"></div>
+          <div class="field"><label>可模板化</label><select name="templateCandidate"><option value="false">否</option><option value="true">是</option></select></div>
+          <div class="field full"><label>备注</label><textarea name="note"></textarea></div>
+          <div class="form-actions"><button class="primary-button" type="submit">记录</button></div>
+        </form>
+      </section>
+      ${renderFrictionSummary()}
       <section class="panel">
         <h2 class="panel-title">复盘记录</h2>
         <div class="list">
@@ -1169,6 +1385,45 @@ function renderReview() {
   `;
 }
 
+function recentFrictionLog(days = 3) {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  return state.frictionLog
+    .map((item) => ({ ...item, createdAtValue: new Date(item.createdAt || 0).getTime() }))
+    .filter((item) => Number.isFinite(item.createdAtValue) && item.createdAtValue >= cutoff)
+    .sort((a, b) => b.createdAtValue - a.createdAtValue);
+}
+
+function renderFrictionSummary() {
+  const recent = recentFrictionLog(3);
+  const minutes = recent.reduce((total, item) => total + (Number.isFinite(Number(item.minutes)) ? Number(item.minutes) : 0), 0);
+  const templateCandidates = recent.filter((item) => item.templateCandidate === true).length;
+
+  return `
+    <section class="panel friction-summary">
+      <div class="item-head">
+        <div><h2 class="panel-title">近 3 天摩擦</h2><p class="panel-note">工作台验收期重点看重复卡点</p></div>
+        <div class="item-meta">
+          ${tag(`记录 ${recent.length}`)}
+          ${tag(`耗时 ${minutes} 分钟`, minutes ? "warn" : "")}
+          ${tag(`可模板化 ${templateCandidates}`, templateCandidates ? "accent" : "")}
+        </div>
+      </div>
+      <div class="list">
+        ${recent.length ? recent.slice(0, 5).map((item) => `
+          <article class="item-card">
+            <div class="item-head">
+              <h3 class="item-title">${escapeHtml(item.stuckAt)}</h3>
+              ${tag(item.minutes ? `${item.minutes} 分钟` : "未记耗时", item.minutes ? "warn" : "")}
+            </div>
+            <div class="item-meta">${tag(displayDate(item.createdAt))}${item.templateCandidate ? tag("可模板化", "accent") : ""}</div>
+            ${item.note ? `<p class="item-note">${escapeHtml(item.note)}</p>` : ""}
+          </article>
+        `).join("") : `<div class="empty">近 3 天暂无摩擦记录</div>`}
+      </div>
+    </section>
+  `;
+}
+
 function renderRuns() {
   const dueCount = state.sources.filter(isDueSource).length;
   const manualCount = state.sources.filter((source) => source.automationStatus === "manual-required").length;
@@ -1176,8 +1431,8 @@ function renderRuns() {
   const failedRuns = state.collectionRuns.filter((run) => run.status === "failed").length;
 
   return `
-    <section class="page-head">
-      <div><h1 class="page-title">采集运行</h1><p class="page-subtitle">状态 · 数量 · 失败原因 · 人工下一步</p></div>
+    <section class="section-head">
+      <div><h2 class="section-title">采集运行</h2><p class="section-subtitle">状态 · 数量 · 失败原因 · 人工下一步</p></div>
       <div class="head-actions">
         <button type="button" class="small-button accent" data-action="run-automation">检查到期采集</button>
         <button type="button" class="small-button" data-action="run-all">强制检查全部</button>
@@ -1232,13 +1487,13 @@ async function loadBackups() {
   backups = result.backups;
   backupRoot = result.backupRoot;
   backupRetentionLimit = result.retentionLimit;
-  if (currentView === "backups") render();
+  if (currentView === "system") render();
 }
 
 function renderBackups() {
   return `
-    <section class="page-head">
-      <div><h1 class="page-title">备份</h1><p class="page-subtitle">${escapeHtml(backupRoot || "BACKUP_DIR 未配置")} · 保留 ${backupRetentionLimit} 份</p></div>
+    <section class="section-head">
+      <div><h2 class="section-title">备份</h2><p class="section-subtitle">${escapeHtml(backupRoot || "BACKUP_DIR 未配置")} · 保留 ${backupRetentionLimit} 份</p></div>
       <div class="head-actions">
         <button type="button" class="small-button" data-action="refresh-backups">刷新列表</button>
         <button type="button" class="small-button accent" data-action="create-backup">立即备份</button>
@@ -1287,8 +1542,8 @@ function renderAgents() {
   const driveConnected = Boolean(state.settings.driveRoot);
 
   return `
-    <section class="page-head">
-      <div><h1 class="page-title">Agent 桥接</h1><p class="page-subtitle">任务包 · 云盘镜像 · 结果回流</p></div>
+    <section class="section-head">
+      <div><h2 class="section-title">Agent 桥接</h2><p class="section-subtitle">任务包 · 云盘镜像 · 结果回流</p></div>
       <div class="head-actions">
         <button type="button" class="small-button" data-action="scan-agent-results">扫描结果</button>
       </div>
@@ -1447,10 +1702,12 @@ document.addEventListener("click", async (event) => {
   const recordId = button.dataset.id;
   try {
     if (action === "nav") {
-      currentView = button.dataset.view;
-      renderNav();
-      render();
-      if (currentView === "backups") await loadBackups();
+      const targetView = button.dataset.view;
+      if (!navItems.some(([key]) => key === targetView)) return;
+      const sameView = currentView === targetView;
+      await activateView(targetView);
+      window.history[sameView ? "replaceState" : "pushState"](null, "", `#${currentView}`);
+      if (button.dataset.anchor) document.getElementById(button.dataset.anchor)?.scrollIntoView({ behavior: "smooth" });
     } else if (action === "refresh") {
       await loadState();
     } else if (action === "filter-inbox") {
@@ -1666,6 +1923,12 @@ document.addEventListener("submit", async (event) => {
   } catch (error) {
     alert(error.message);
   }
+});
+
+window.addEventListener("hashchange", () => {
+  const targetView = viewFromLocationHash();
+  if (targetView === currentView) return;
+  activateView(targetView).catch((error) => alert(error.message));
 });
 
 loadState().catch((error) => {
