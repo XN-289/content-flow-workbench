@@ -65,6 +65,7 @@ npm run remove-task
 - 账号页“对标账号快速登记”支持粘贴分享文案；小红书只解析短链到公开主页，不做后台全量历史抓取。
 - 快速粘贴、本地文本投递、RSS 和公开页面会自动保存 `contentText`，并生成最多 30 条数据口径候选；公开页面还会从 OG 图片、`img` 替代文本和 `figcaption` 提取最多 20 条图片描述。
 - Inbox 的“拆解线索”折叠区展示数据口径候选、图片描述和正文全文；“入素材”会优先转存第一条数据口径候选，并标记发布前必须回原文核对。
+- 高价值信号可通过证据包接口生成分层证据：`meta.json`、原始信号、采集快照、候选摘录、媒体清单和 SHA-256 校验；证据只保存在本地 `evidence/`，不进入 Git。
 - 信号去重有四层：规范化链接、平台内容 ID、平台 + 作者 + 标题、平台 + 标题 + 发布时间；小红书 `explore` 和 `discovery/item` 的同一笔记 ID 会被视为同一条。
 - Inbox 根据作者互动基线自动标记高潜力、值得观察、常规、待补数据。
 - 到达 Inbox 时间后自动生成当日晨报，汇总优先信号、待人工账号、失败重试账号和生产选题数。
@@ -117,6 +118,7 @@ npm run remove-task
 | 小红书采集边界 | [docs/xhs-collection-research.md](docs/xhs-collection-research.md) |
 | 自动化调度设计 | [docs/automation-research.md](docs/automation-research.md) |
 | 外部自动化项目调研 | [docs/external-automation-research.md](docs/external-automation-research.md) |
+| 分层证据包标准 | [docs/evidence-package.md](docs/evidence-package.md) |
 | 日常输入流程 | [docs/local-input-workflow.md](docs/local-input-workflow.md) |
 | 端到端链路与状态机 | [docs/end-to-end-chain.md](docs/end-to-end-chain.md) |
 | Agent 桥接 | [docs/agent-bridge.md](docs/agent-bridge.md) |

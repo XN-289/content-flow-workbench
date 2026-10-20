@@ -9,6 +9,8 @@ drops/*
 !drops/README.md
 bridge/*
 !bridge/README.md
+evidence/*
+!evidence/README.md
 
 # Environment and runtime artifacts
 .env

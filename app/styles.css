@@ -333,6 +333,14 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.field-error {
+  min-height: 18px;
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .field label {
   color: var(--muted);
   font-size: 12px;
@@ -861,6 +869,14 @@ textarea {
 }
 
 .workflow-transition .item-actions {
+  margin-top: 8px;
+}
+
+.evidence-actions {
+  padding-top: 2px;
+}
+
+.evidence-review {
   margin-top: 8px;
 }
 

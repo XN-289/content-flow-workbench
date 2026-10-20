@@ -135,7 +135,7 @@ async function waitForServer(base) {
   throw new Error(`temporary workbench did not start: ${lastError}`);
 }
 
-async function startWorkbench(port, dataFile, dropDir, bridgeRoot, backupDir) {
+async function startWorkbench(port, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir) {
   const child = spawn(process.execPath, [path.join(repoRoot, "scripts/server.mjs")], {
     cwd: repoRoot,
     env: {
@@ -145,6 +145,7 @@ async function startWorkbench(port, dataFile, dropDir, bridgeRoot, backupDir) {
       DROP_DIR: dropDir,
       BRIDGE_ROOT: bridgeRoot,
       BACKUP_DIR: backupDir,
+      EVIDENCE_DIR: evidenceDir,
       AUTOMATION_ENABLED: "false",
       AUTOMATION_TICK_MS: "60000",
       DROP_SCAN_MS: "60000"
@@ -196,10 +197,12 @@ async function main() {
   const bridgeRoot = path.join(tempRoot, "bridge");
   const driveRoot = path.join(tempRoot, "drive-root");
   const backupDir = path.join(tempRoot, "backups");
+  const evidenceDir = path.join(tempRoot, "evidence");
   await fs.mkdir(dropDir, { recursive: true });
   await fs.mkdir(bridgeRoot, { recursive: true });
   await fs.mkdir(driveRoot, { recursive: true });
   await fs.mkdir(backupDir, { recursive: true });
+  await fs.mkdir(evidenceDir, { recursive: true });
 
   const mockPort = await getPort();
   const workbenchPort = await getPort();
@@ -215,7 +218,7 @@ async function main() {
   });
   await new Promise((resolve) => mockServer.listen(mockPort, "127.0.0.1", resolve));
 
-  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir);
+  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir);
   await waitForServer(base);
 
   // Import identity keeps manual Inbox decisions instead of pushing records back to Inbox.
@@ -499,6 +502,38 @@ async function main() {
   truthy(current.rawSnapshots.some((snapshot) => snapshot.context?.profileNoteCount === 5), "visible capture snapshot context");
   pass("对标分享文案可登记，重复采集和重复登记都会保留覆盖率");
 
+  const evidenceSignal = current.signals.find((signal) => signal.url === "https://www.xiaohongshu.com/explore/four");
+  const firstEvidence = await api(base, "/api/evidence-packages/create", { signalId: evidenceSignal.id });
+  truthy(firstEvidence.created, "first evidence package created flag");
+  truthy(path.isAbsolute(firstEvidence.record.packageDirectory), "evidence package local directory path");
+  equal(firstEvidence.record.missingLayers.length, 0, "evidence package raw snapshot layer");
+  const evidenceDirectory = path.join(evidenceDir, firstEvidence.record.packageKey);
+  const evidenceMeta = JSON.parse(await fs.readFile(path.join(evidenceDirectory, "meta.json"), "utf8"));
+  equal(evidenceMeta.evidence.id, firstEvidence.record.id, "evidence meta ID");
+  equal(evidenceMeta.provenance.rawSnapshotIds.length, 1, "evidence meta raw snapshot count");
+  truthy(await fs.stat(path.join(evidenceDirectory, "raw", "snapshot.json")), "evidence raw snapshot file");
+  truthy(await fs.stat(path.join(evidenceDirectory, "candidate", "excerpt.md")), "evidence candidate excerpt file");
+  truthy(await fs.stat(path.join(evidenceDirectory, "media-manifest.json")), "evidence media manifest file");
+  const checksumText = await fs.readFile(path.join(evidenceDirectory, "checksums.sha256"), "utf8");
+  truthy(checksumText.includes(firstEvidence.record.metaSha256), "evidence checksum manifest");
+
+  await api(base, "/api/evidence-packages/verify", {
+    id: firstEvidence.record.id,
+    state: "verified",
+    checkedBy: "regression-user",
+    note: "已核对 synthetic 原始快照"
+  });
+  const verifiedMeta = JSON.parse(await fs.readFile(path.join(evidenceDirectory, "meta.json"), "utf8"));
+  equal(verifiedMeta.verification.state, "verified", "evidence meta verification state");
+  const secondEvidence = await api(base, "/api/evidence-packages/create", { signalId: evidenceSignal.id });
+  equal(secondEvidence.created, false, "duplicate evidence package created flag");
+  equal(secondEvidence.record.verification.state, "verified", "evidence verification preserved after rebuild");
+  current = await state(base);
+  equal(current.evidencePackages.length, 1, "evidence package identity count");
+  equal(current.runtime.evidencePackages.total, 1, "evidence runtime total");
+  equal(current.runtime.evidencePackages.verified, 1, "evidence runtime verified count");
+  pass("分层证据包支持原始快照、候选摘录、媒体清单、哈希和人工核对留痕");
+
   // A 200 HTML response is a failed collection, not a successful RSS import.
   const feedSource = (await api(base, "/api/import", {
     sources: [{
@@ -567,6 +602,15 @@ async function main() {
   );
   truthy(appJs.includes("function renderBackups"), "backup view renderer");
   truthy(appJs.includes("function renderCommandCenter"), "command center renderer");
+  truthy(appJs.includes("function renderInbox"), "inbox renderer");
+  truthy(
+    appJs.includes("create-evidence-package") && appJs.includes("copy-evidence-path") && appJs.includes("data-evidence-form"),
+    "inbox evidence package controls"
+  );
+  truthy(
+    appJs.includes("标记“证据已核对”前，请填写人工核对说明。"),
+    "verified evidence requires a visible human note"
+  );
   truthy(appJs.includes("commandCoverageText"), "command center coverage helper");
   truthy(appJs.includes("const navItems"), "primary tab navigation definition");
   truthy(appJs.includes('["overview", "总览"]'), "overview primary tab");
@@ -622,7 +666,7 @@ async function main() {
     acquiredAt: new Date().toISOString()
   }), "utf8");
   await fs.writeFile(dataFile, JSON.stringify(diskState, null, 2), "utf8");
-  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir);
+  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir);
   await waitForServer(base);
   let restartedState = null;
   for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -639,7 +683,7 @@ async function main() {
     pid: 999999,
     acquiredAt: new Date().toISOString()
   }), "utf8");
-  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir);
+  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir);
   await waitForServer(base);
   for (let attempt = 0; attempt < 30; attempt += 1) {
     restartedState = await state(base);

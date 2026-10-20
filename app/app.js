@@ -89,6 +89,11 @@ const automationTierLabels = {
   normal: "常规",
   "needs-review": "待补数据"
 };
+const evidenceVerificationLabels = {
+  unverified: "证据待核对",
+  verified: "证据已核对",
+  rejected: "证据弃用"
+};
 
 const agentLabels = {
   grok: "Grok",
@@ -934,6 +939,7 @@ function renderSources() {
 
 function renderInbox() {
   const funnel = state.runtime?.inbox;
+  const evidenceBySignal = new Map((state.evidencePackages || []).map((item) => [item.signalId, item]));
   const filtered = state.signals.filter((signal) => {
     if (inboxFilter === "inbox") return signal.disposition === "inbox";
     if (inboxFilter === "unseen") return !signal.seen;
@@ -998,6 +1004,8 @@ function renderInbox() {
         const contentText = String(signal.contentText || "").trim();
         const imageDescriptions = Array.isArray(signal.imageDescriptions) ? signal.imageDescriptions : [];
         const dataPoints = Array.isArray(signal.dataPointCandidates) ? signal.dataPointCandidates : [];
+        const evidence = evidenceBySignal.get(signal.id) || null;
+        const evidenceVerification = evidence?.verification?.state || "unverified";
         return `
           <article class="item-card" data-signal-card="${escapeHtml(signal.id)}">
             <div class="item-head">
@@ -1019,6 +1027,10 @@ function renderInbox() {
               ${contentText ? tag(`正文 ${contentText.length} 字`) : ""}
               ${imageDescriptions.length ? tag(`图片描述 ${imageDescriptions.length}`) : ""}
               ${dataPoints.length ? tag(`数据口径 ${dataPoints.length}`, "warn") : ""}
+              ${evidence
+                ? tag(evidenceVerificationLabels[evidenceVerification] || evidenceVerification, evidenceVerification === "verified" ? "accent" : evidenceVerification === "rejected" ? "danger" : "warn")
+                : tag("未建证据包")}
+              ${evidence?.missingLayers?.includes("raw-snapshot") ? tag("缺原始快照", "warn") : ""}
             </div>
             ${signal.note ? `<p class="item-note">${escapeHtml(signal.note)}</p>` : ""}
             ${(contentText || imageDescriptions.length || dataPoints.length) ? `
@@ -1069,6 +1081,33 @@ function renderInbox() {
               <button type="button" class="small-button" data-action="disposition" data-id="${escapeHtml(signal.id)}" data-value="watch">观察</button>
               <button type="button" class="danger-button" data-action="disposition" data-id="${escapeHtml(signal.id)}" data-value="discard">丢弃</button>
             </div>
+            <div class="item-actions evidence-actions">
+              <button type="button" class="small-button ${evidence ? "" : "accent"}" data-action="create-evidence-package" data-id="${escapeHtml(signal.id)}">${evidence ? "重建证据包" : "生成证据包"}</button>
+              ${evidence ? `<button type="button" class="small-button" data-action="copy-evidence-path" data-id="${escapeHtml(evidence.id)}">复制证据目录</button>` : ""}
+            </div>
+            ${evidence ? `
+              <details class="details evidence-review">
+                <summary>核对证据包</summary>
+                <form class="form-grid" data-evidence-form="${escapeHtml(evidence.id)}">
+                  <div class="field">
+                    <label>核对状态</label>
+                    <select name="state">
+                      ${Object.entries(evidenceVerificationLabels).map(([value, label]) => `<option value="${escapeHtml(value)}" ${evidenceVerification === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+                    </select>
+                  </div>
+                  <div class="field full">
+                    <label>人工核对说明（已核对必填）</label>
+                    <textarea
+                      name="note"
+                      aria-describedby="evidence-note-error-${escapeHtml(evidence.id)}"
+                      placeholder="写来源、原文和摘录的核对结论"
+                    >${escapeHtml(evidence.verification?.note || "")}</textarea>
+                    <p class="field-error" id="evidence-note-error-${escapeHtml(evidence.id)}" data-evidence-note-error></p>
+                  </div>
+                  <div class="form-actions"><button class="primary-button" type="submit">保存核对</button></div>
+                </form>
+              </details>
+            ` : ""}
             <details class="details workflow-transition">
               <summary>转入工作流</summary>
               <div class="item-actions">
@@ -1792,6 +1831,25 @@ document.addEventListener("click", async (event) => {
       setTimeout(() => {
         button.textContent = "复制目录";
       }, 1600);
+    } else if (action === "create-evidence-package") {
+      const originalText = button.textContent;
+      button.disabled = true;
+      button.textContent = "生成中";
+      try {
+        await api("/api/evidence-packages/create", "POST", { signalId: recordId });
+        await loadState();
+      } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
+    } else if (action === "copy-evidence-path") {
+      const evidence = (state.evidencePackages || []).find((item) => item.id === recordId);
+      if (!evidence?.packageDirectory) throw new Error("证据目录不存在");
+      await navigator.clipboard.writeText(evidence.packageDirectory);
+      button.textContent = "目录已复制";
+      setTimeout(() => {
+        button.textContent = "复制证据目录";
+      }, 1600);
     } else if (action === "disposition") {
       await updateRecord("signals", recordId, { disposition: button.dataset.value, seen: true });
     } else if (action === "signal-material") {
@@ -1865,6 +1923,23 @@ function formObject(form) {
   return Object.fromEntries(new FormData(form).entries());
 }
 
+function showEvidenceFormError(form, message) {
+  const note = form.querySelector("[name='note']");
+  const error = form.querySelector("[data-evidence-note-error]");
+  if (!note || !error) return;
+  error.textContent = message;
+  note.setAttribute("aria-invalid", "true");
+  note.focus();
+}
+
+function clearEvidenceFormError(form) {
+  const note = form.querySelector("[name='note']");
+  const error = form.querySelector("[data-evidence-note-error]");
+  if (!note || !error) return;
+  error.textContent = "";
+  note.removeAttribute("aria-invalid");
+}
+
 document.addEventListener("submit", async (event) => {
   const form = event.target.closest("form");
   if (!form) return;
@@ -1872,6 +1947,24 @@ document.addEventListener("submit", async (event) => {
   try {
     if (form.dataset.editForm) {
       await updateRecord(form.dataset.editForm, form.dataset.id, formObject(form));
+    } else if (form.dataset.evidenceForm) {
+      const data = formObject(form);
+      clearEvidenceFormError(form);
+      if (data.state === "verified" && !String(data.note || "").trim()) {
+        showEvidenceFormError(form, "标记“证据已核对”前，请填写人工核对说明。");
+        return;
+      }
+      try {
+        await api("/api/evidence-packages/verify", "POST", {
+          id: form.dataset.evidenceForm,
+          state: data.state,
+          note: data.note
+        });
+      } catch (error) {
+        showEvidenceFormError(form, error.message);
+        return;
+      }
+      await loadState();
     } else if (form.id === "quick-capture") {
       const data = formObject(form);
       const result = await api("/api/capture", "POST", { text: data.text, sourceId: data.sourceId });

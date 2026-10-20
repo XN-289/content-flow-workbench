@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { createBackupStore } from "./backup-store.mjs";
+import { createEvidenceRuntime, createSignalEvidencePackage, verifyEvidencePackage } from "./evidence-package.mjs";
 import { inboxFunnelRuntime } from "./inbox-funnel.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -19,6 +20,7 @@ const dropDir = process.env.DROP_DIR ? path.resolve(process.env.DROP_DIR) : path
 const dropProcessedDir = path.join(dropDir, "processed");
 const dropFailedDir = path.join(dropDir, "failed");
 const bridgeRoot = process.env.BRIDGE_ROOT ? path.resolve(process.env.BRIDGE_ROOT) : path.join(root, "bridge");
+const evidenceRoot = process.env.EVIDENCE_DIR ? path.resolve(process.env.EVIDENCE_DIR) : path.join(root, "evidence");
 const agentBridgeOutboxDir = path.join(bridgeRoot, "outbox");
 const port = Number(process.env.PORT || 5177);
 const automationTickMs = Math.max(1000, Number(process.env.AUTOMATION_TICK_MS || 60000));
@@ -58,7 +60,8 @@ const emptyState = () => ({
   rawSnapshots: [],
   morningBriefs: [],
   frictionLog: [],
-  agentTasks: []
+  agentTasks: [],
+  evidencePackages: []
 });
 
 const { stableJsonValue, readBackupFile, listBackups, createBackup } = createBackupStore({
@@ -83,7 +86,8 @@ async function readState() {
       ...emptyState(),
       ...parsed,
       settings: { ...emptyState().settings, ...(parsed.settings || {}) },
-      agentTasks: Array.isArray(parsed.agentTasks) ? parsed.agentTasks : []
+      agentTasks: Array.isArray(parsed.agentTasks) ? parsed.agentTasks : [],
+      evidencePackages: Array.isArray(parsed.evidencePackages) ? parsed.evidencePackages : []
     };
     state.settings.driveRoot = String(state.settings.driveRoot || "").trim();
     refreshEngagementMetrics(state);
@@ -400,7 +404,8 @@ function runtimeState(state) {
     },
     browserCapture: browserCaptureRuntime(state),
     commandCenter: commandCenterRuntime(state),
-    inbox: inboxFunnelRuntime(state)
+    inbox: inboxFunnelRuntime(state),
+    evidencePackages: createEvidenceRuntime(state)
   };
 }
 
@@ -2701,6 +2706,30 @@ async function handleApi(request, response, pathname) {
         const intake = await importSourceIntake(state, body.text);
         await writeState(state);
         return intake;
+      });
+      return sendJson(response, 200, result, request);
+    }
+
+    if (pathname === "/api/evidence-packages/create") {
+      const signalId = String(body.signalId || "");
+      if (!signalId) return sendJson(response, 400, { ok: false, error: "signalId is required" }, request);
+      const result = await enqueueStateMutation(async () => {
+        const state = await readState();
+        const created = await createSignalEvidencePackage({ state, signalId, evidenceRoot });
+        await writeState(state);
+        return { ok: true, ...created };
+      });
+      return sendJson(response, 200, result, request);
+    }
+
+    if (pathname === "/api/evidence-packages/verify") {
+      const evidenceId = String(body.id || "");
+      if (!evidenceId) return sendJson(response, 400, { ok: false, error: "id is required" }, request);
+      const result = await enqueueStateMutation(async () => {
+        const state = await readState();
+        const record = await verifyEvidencePackage(state, evidenceId, body, evidenceRoot);
+        await writeState(state);
+        return { ok: true, record };
       });
       return sendJson(response, 200, result, request);
     }
