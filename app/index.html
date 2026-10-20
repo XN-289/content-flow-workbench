@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="auto">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>个人内容工作台</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=apple-4">
 </head>
 <body>
   <header class="topbar">
@@ -14,6 +14,11 @@
     </div>
     <nav id="nav" class="nav" aria-label="主导航"></nav>
     <div class="top-actions">
+      <div class="theme-switch" role="group" aria-label="界面明暗模式">
+        <button type="button" data-action="set-theme" data-theme-value="auto" aria-pressed="true">自动</button>
+        <button type="button" data-action="set-theme" data-theme-value="light" aria-pressed="false">浅色</button>
+        <button type="button" data-action="set-theme" data-theme-value="dark" aria-pressed="false">深色</button>
+      </div>
       <span id="data-state" class="data-state">本地数据</span>
       <button type="button" class="ghost-button" data-action="refresh">刷新</button>
       <a class="ghost-button" href="/api/export">导出</a>
@@ -22,6 +27,6 @@
 
   <main id="view" class="view"></main>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=theme-1"></script>
 </body>
 </html>

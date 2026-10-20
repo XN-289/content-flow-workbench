@@ -1,6 +1,6 @@
 # PROJECT_STATE
 
-Updated: 2026-10-20 12:15
+Updated: 2026-10-20 14:11
 Current phase: implementation
 
 ## 一句话现状
@@ -47,6 +47,7 @@ Current phase: implementation
 - WRITEOS 建议选择性吸收完成：采纳 Inbox 清零漏斗、来源推进率反馈和 AI 聚类暂缓边界，不迁移技术栈、不做 CRM / 矩阵账号 / 登录态采集 — `decisions.md`、`scripts/inbox-funnel.mjs`
 - 界面信息架构已确定为四个大类 tab；总览、信息流、工作流、系统内直接连续排列模块，不设二级 tab — `decisions.md`、`app/app.js`
 - 工作台体验调研完成：吸收 Postiz / Mixpost 的队列可见性和 LangChain social-media-agent 的人工关卡，不吸收团队协作、平台直发和重型 SaaS 架构 — `docs/workbench-ux-research.md`
+- UI 改动有项目内验收门槛：先定义工作流和信息架构，再改界面；隐式状态必须有显式控件、可恢复并持久化；明暗、可访问性、响应式和四视图检查与业务回归同级别 — `docs/workbench-ui-principles.md`
 
 ## 决策索引
 
@@ -117,6 +118,7 @@ Current phase: implementation
 - Inbox 清零漏斗 — `scripts/inbox-funnel.mjs`、`scripts/server.mjs`、`app/app.js`、`app/styles.css`、`scripts/chain-regression.mjs` — 输出全局与来源级的待处理、已判断、已推进、推进率和未看计数；未关联来源归入快速收集；`node --check`、`npm run test:chain` 18 项回归、1440 / 390 视口无横向溢出和 5177 健康检查通过
 - 四个大类 tab — `app/app.js`、`app/styles.css`、`scripts/chain-regression.mjs` — 主导航只保留总览 / 信息流 / 工作流 / 系统；信息流、工作流、系统分别组合渲染原有模块，总览动作使用锚点定位但不形成二级 tab；链路回归保护大类路由和旧二级路由清理
 - 工作台行动优先体验 — `app/app.js`、`app/styles.css`、`docs/workbench-ux-research.md`、`scripts/chain-regression.mjs` — 总览提供现在 / 接着 / 稍后行动队列与作品目标进度，行动队列可直接跳转对应模块；信息流提供进料 / Inbox / 素材节奏，工作流提供阶段漏斗和近 3 天摩擦摘要，发布台账提供平台队列；大类 hash 重渲染、浏览器返回 / 前进、系统页移动端溢出修复和模块位置进入回归；`node --check`、`npm run test:chain` 18 项、`git diff --check` 和桌面 / 390px 四视图 Playwright 检查通过
+- UI 设计原则与验收门槛 — `docs/workbench-ui-principles.md` — 固化四个大类 tab、行动优先、显式状态控件、明暗三态、可访问性、响应式、Apple 式视觉语言和 UI 交付前清单；以后界面改动先过该清单再提交
 
 ## 已验收
 
@@ -165,6 +167,7 @@ Current phase: implementation
 - 小红书采集调研：`docs/xhs-collection-research.md`
 - 外部自动化项目调研：`docs/external-automation-research.md`
 - 工作台体验调研：`docs/workbench-ux-research.md`
+- UI 设计原则：`docs/workbench-ui-principles.md`
 - Agent 桥接：`docs/agent-bridge.md`
 - 待办清单：`TODO.md`
 - 导入模板：`data/import-template.json`
@@ -201,3 +204,5 @@ Current phase: implementation
 - 2026-10-20 11:22 — 按用户手感收回扁平 tab 工作台 — 独立收集页撤回，快速粘贴回到今日页，保留 Inbox 漏斗和复盘摩擦记录；当前改动尚未提交
 - 2026-10-20 11:30 — 主导航确定为四个大类 tab — 信息流、工作流、系统改为大类内连续工作区，总览动作支持锚点定位；当前改动尚未提交
 - 2026-10-20 12:15 — 行动优先界面补齐直接跳转和摩擦反馈 — 总览行动队列可点击直达对应模块，复盘区显示近 3 天摩擦摘要；18 项链路回归与桌面 / 移动四视图检查通过；本轮改动进入本地 Git 提交
+- 2026-10-20 14:11 — 固化 UI 设计原则与验收门槛 — 明确四类 tab 信息架构、显式状态控件、明暗三态、可访问性、响应式和视觉语言；后续 UI 改动必须先过清单再提交
+- 2026-10-20 14:22 — 收紧移动端顶栏密度 — 明暗切换与本地数据状态同排展示，主题按钮保持 44px 触控高度；390px 首屏不再被顶栏占掉一半

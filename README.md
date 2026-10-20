@@ -120,6 +120,7 @@ npm run remove-task
 | 日常输入流程 | [docs/local-input-workflow.md](docs/local-input-workflow.md) |
 | 端到端链路与状态机 | [docs/end-to-end-chain.md](docs/end-to-end-chain.md) |
 | Agent 桥接 | [docs/agent-bridge.md](docs/agent-bridge.md) |
+| UI 设计原则与验收门槛 | [docs/workbench-ui-principles.md](docs/workbench-ui-principles.md) |
 | 决策记录 | [decisions.md](decisions.md) |
 
 ## 验证

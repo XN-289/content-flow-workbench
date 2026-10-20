@@ -207,6 +207,23 @@ let backupRetentionLimit = 100;
 const appNav = document.getElementById("nav");
 const viewEl = document.getElementById("view");
 const dataState = document.getElementById("data-state");
+const themeStorageKey = "workbench-theme";
+const themeValues = new Set(["auto", "light", "dark"]);
+
+function normalizeTheme(value) {
+  return themeValues.has(value) ? value : "auto";
+}
+
+function setTheme(theme, { persist = true } = {}) {
+  const nextTheme = normalizeTheme(theme);
+  document.documentElement.dataset.theme = nextTheme;
+  for (const button of document.querySelectorAll("[data-theme-value]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.themeValue === nextTheme));
+  }
+  if (persist) localStorage.setItem(themeStorageKey, nextTheme);
+}
+
+setTheme(normalizeTheme(localStorage.getItem(themeStorageKey)), { persist: false });
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1708,6 +1725,8 @@ document.addEventListener("click", async (event) => {
       await activateView(targetView);
       window.history[sameView ? "replaceState" : "pushState"](null, "", `#${currentView}`);
       if (button.dataset.anchor) document.getElementById(button.dataset.anchor)?.scrollIntoView({ behavior: "smooth" });
+    } else if (action === "set-theme") {
+      setTheme(button.dataset.themeValue);
     } else if (action === "refresh") {
       await loadState();
     } else if (action === "filter-inbox") {

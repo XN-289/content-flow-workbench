@@ -540,6 +540,7 @@ async function main() {
 
   const indexResponse = await fetch(`${base}/`);
   equal(indexResponse.status, 200, "workbench page status");
+  const indexHtml = await indexResponse.text();
   const traversalResponse = await requestRoute(base, "/..%2fpackage.json");
   equal(traversalResponse.status, 403, "static traversal response status");
   const topicCountBeforeBodyLimit = (await state(base)).topics.length;
@@ -586,6 +587,8 @@ async function main() {
   truthy(appJs.includes("function viewFromLocationHash"), "primary tab deep-link helper");
   truthy(appJs.includes("async function activateView"), "primary tab activation helper");
   truthy(appJs.includes('window.addEventListener("hashchange"'), "primary tab hash-change handler");
+  truthy(indexHtml.includes('data-theme="auto"') && indexHtml.includes('data-action="set-theme"'), "explicit theme mode switch");
+  truthy(appJs.includes("function setTheme") && appJs.includes("localStorage.setItem(themeStorageKey"), "theme mode persistence helper");
   const todayRenderer = appJs.slice(
     appJs.indexOf("function renderToday"),
     appJs.indexOf("function renderSources")
