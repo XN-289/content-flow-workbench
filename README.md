@@ -59,7 +59,7 @@ npm run remove-task
 
 - `npm start` 后服务端每 60 秒检查一次到期任务，不需要外部队列或额外采集任务计划。
 - `npm run setup-task` 会安装当前用户的 Windows 登录任务，让本地服务常驻；只想临时运行时仍用 `npm start`。
-- 服务端每 10 秒检查 `drops/`，信号进 Inbox，素材 / 热评进素材库；重复链接和重复摘录不会重复入库。
+- 服务端每 30 秒检查 `drops/`，信号进 Inbox，素材 / 热评进素材库；重复链接和重复摘录不会重复入库。
 - 自动调度、投递箱扫描和 Agent 结果扫描都有同类任务合并保护；上一轮未结束时跳过本轮，避免慢任务无限堆积排队。
 - 今日页“快速粘贴”接口会保存原始文本快照；支持 JSON、普通文本、链接、常见互动数和热评前缀，自动匹配同域名账号。
 - 账号页“对标账号快速登记”支持粘贴分享文案；小红书只解析短链到公开主页，不做后台全量历史抓取。
@@ -75,7 +75,7 @@ npm run remove-task
 - 每次采集运行都有统一结果信封：`found / created / duplicates / blocked / failed / coverage / nextAction / cursor / error`，公开采集、浏览器辅助、投递箱和快速粘贴共用同一口径；契约见 [docs/collection-envelope.md](docs/collection-envelope.md)。
 - 账号页和采集页会显示下次运行时间、待人工、失败次数和最后错误。
 - 页面可暂停 / 恢复自动化；也可以用环境变量 `AUTOMATION_ENABLED=false` 强制关闭。
-- 投递箱目录和扫描间隔可用 `DROP_DIR`、`DROP_SCAN_MS` 覆盖，单文件最大 2 MB。
+- 投递箱目录和扫描间隔可用 `DROP_DIR`、`DROP_SCAN_MS` 覆盖，默认 30 秒，单文件最大 2 MB。
 
 设计参考与边界见 [docs/automation-research.md](docs/automation-research.md)。下一阶段控制面调研见 [docs/external-automation-research.md](docs/external-automation-research.md)。
 
@@ -84,7 +84,7 @@ npm run remove-task
 - 工作台新增“桥接”视图，可以把研究、拆解、提纲、口播稿、标题、平台文案和视觉方案打包成 Agent 任务。
 - 支持 Grok、Muse、Codex、Claude、Cursor 五类目标：Grok / Muse 复制任务后回写 `result.md`；Codex / Claude 支持本机一键运行；Cursor 通过任务目录接入。
 - Google Drive 第一版使用桌面同步目录，不保存 API Key、不做 OAuth。任务默认仅本地保存；创建任务时显式勾选后，才镜像到 `<Drive>/ContentFlowWorkbench/Outbox/<task-id>/`。
-- 服务每 10 秒扫描本地和 Drive 侧结果，取较新的 `result.md`；提纲和口播稿导入生产稿版本，其他结果导入素材库。
+- 服务每 30 秒扫描本地和 Drive 侧结果，取较新的 `result.md`；提纲和口播稿导入生产稿版本，其他结果导入素材库。
 - Codex / Claude 本机任务使用 `task.lock` 防重复运行；结果先写 `result.pending.md`，完成后才替换为 `result.md`。服务重启后会检查锁内进程，仍存活则等待结果，已消失才恢复为待重跑。
 - Agent 输出永远是候选，引用、数字、时间和来源必须人工核对后才能进入发布链路。
 

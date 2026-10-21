@@ -47,10 +47,15 @@ function sourceCoverage(source, rawSnapshot, collectionRun) {
 }
 
 function mediaItems(signal = {}) {
-  return (Array.isArray(signal.imageDescriptions) ? signal.imageDescriptions : [])
+  const rawItems = [
+    ...(Array.isArray(signal.mediaItems) ? signal.mediaItems : []),
+    ...(Array.isArray(signal.imageDescriptions) ? signal.imageDescriptions : [])
+  ];
+  return rawItems
     .filter((item) => item && typeof item === "object" && item.url)
+    .filter((item, index, items) => items.findIndex((other) => other.url === item.url) === index)
     .map((item) => ({
-      type: "image",
+      type: ["image", "video"].includes(item.type) ? item.type : "unknown",
       url: String(item.url),
       description: String(item.description || ""),
       status: "not-downloaded",
@@ -58,6 +63,22 @@ function mediaItems(signal = {}) {
       downloadedAt: "",
       checksum: ""
     }));
+}
+
+function formatTranscriptTimestamp(value) {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  const seconds = Number.isFinite(Number(value)) ? Number(value) : 0;
+  const totalMilliseconds = Math.max(0, Math.round(seconds * 1000));
+  const hours = Math.floor(totalMilliseconds / 3600000);
+  const minutes = Math.floor((totalMilliseconds % 3600000) / 60000);
+  const secondPart = Math.floor((totalMilliseconds % 60000) / 1000);
+  const milliseconds = totalMilliseconds % 1000;
+  const minutePart = hours > 0
+    ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`
+    : String(minutes).padStart(2, "0");
+  return `${minutePart}:${String(secondPart).padStart(2, "0")}.${String(milliseconds).padStart(3, "0")}`;
 }
 
 function verificationFrom(existing = {}) {
@@ -93,7 +114,7 @@ export async function createSignalEvidencePackage({
   const collectionRun = (state.collectionRuns || []).find((item) => item.id === signal.collectionRunId) || null;
   const rawSnapshots = (state.rawSnapshots || [])
     .filter((snapshot) => (
-      snapshot.runId === signal.collectionRunId
+      (Boolean(snapshot.runId) && snapshot.runId === signal.collectionRunId)
       || snapshot.id === signal.rawSnapshotId
     ))
     .slice(0, 3);
@@ -132,6 +153,37 @@ export async function createSignalEvidencePackage({
       snapshot: rawSnapshot
     });
     hashes.set("raw/snapshot.json", snapshotFile.hash);
+  }
+
+  const transcriptSegments = Array.isArray(signal.transcriptSegments) ? signal.transcriptSegments : [];
+  const hasTranscript = signal.transcriptStatus === "captured" && Boolean(String(signal.transcriptText || "").trim());
+  if (hasTranscript) {
+    const transcriptLines = [
+      "# Candidate Transcript",
+      "",
+      "This file is a local ASR candidate and requires human review.",
+      "",
+      `- Signal ID: ${signal.id}`,
+      `- Status: ${signal.transcriptStatus}`,
+      `- Source: ${signal.transcriptSource || "unknown"}`,
+      `- Model: ${signal.transcriptModel || "unknown"}`,
+      `- Duration seconds: ${signal.transcriptDurationSeconds ?? "unknown"}`,
+      `- Segment count: ${transcriptSegments.length}`,
+      `- Artifact path: ${signal.transcriptArtifactPath || "missing"}`,
+      "",
+      "## Transcript",
+      "",
+      String(signal.transcriptText || ""),
+      "",
+      "## Timeline",
+      ""
+    ];
+    for (const segment of transcriptSegments) {
+      transcriptLines.push(`${formatTranscriptTimestamp(segment.startTimestamp ?? segment.start)} - ${formatTranscriptTimestamp(segment.endTimestamp ?? segment.end)}: ${String(segment.text || "")}`);
+    }
+    const transcriptContent = `${transcriptLines.join("\n")}\n`;
+    await writeFileAtomic(path.join(packageDirectory, "candidate", "transcript.md"), transcriptContent);
+    hashes.set("candidate/transcript.md", sha256(transcriptContent));
   }
 
   const candidateLines = [
@@ -213,6 +265,14 @@ export async function createSignalEvidencePackage({
     },
     verification,
     coverage: sourceCoverage(source, rawSnapshot, collectionRun),
+    transcript: {
+      status: signal.transcriptStatus || "missing",
+      source: signal.transcriptSource || "",
+      model: signal.transcriptModel || "",
+      durationSeconds: signal.transcriptDurationSeconds ?? null,
+      segmentCount: transcriptSegments.length,
+      reviewRequired: true
+    },
     media: {
       status: mediaManifest.status,
       count: media.length,
@@ -245,7 +305,14 @@ export async function createSignalEvidencePackage({
     packageDirectory,
     status: "candidate",
     verification,
-    layers: ["meta", "raw-signal", "candidate", "media-manifest", ...(rawSnapshot ? ["raw-snapshot"] : [])],
+    layers: [
+      "meta",
+      "raw-signal",
+      "candidate",
+      "media-manifest",
+      ...(hasTranscript ? ["candidate-transcript"] : []),
+      ...(rawSnapshot ? ["raw-snapshot"] : [])
+    ],
     missingLayers,
     mediaCount: media.length,
     metaSha256: metaFile.hash,

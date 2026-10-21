@@ -13,6 +13,8 @@
       "collectionMethod": "manual | browser-assisted | public-rss | public-page | official-api | platform-export | research-only",
       "dataBoundary": "public | own-account-export | manual-copy | research-only",
       "lastRunStatus": "never-run | ok | partial | failed",
+    "profileFollowers": null,
+    "profileEngagement": null,
       "authorMedianEngagement": null,
       "keepReason": "",
       "tags": []

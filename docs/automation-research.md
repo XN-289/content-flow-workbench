@@ -50,7 +50,7 @@ AIHOT 是一个完整热点站框架，本项目是本地单人生产工作台�
 | 常驻入口 | `npm run setup-task` 安装当前用户登录任务；`npm run remove-task` 移除 |
 | 手动入口 | `POST /api/automation/tick`，`npm run collect` 只跑到期任务 |
 | 强制入口 | `npm run collect -- --force` 或页面“强制检查全部” |
-| 本地投递箱 | `drops/` 每 10 秒扫描，JSON / Markdown / TXT 自动解析、去重、入库和归档 |
+| 本地投递箱 | `drops/` 默认每 30 秒扫描，JSON / Markdown / TXT 自动解析、去重、入库和归档 |
 | 快速粘贴 | `POST /api/capture` 解析 JSON / 普通文本，自动识别 URL、标题、互动数和热评 |
 | 公开页面 | 解析 Open Graph、JSON-LD、canonical 和同站链接，不再只保存快照 |
 | 多层去重 | 规范化链接、平台内容 ID、作者 + 标题、标题 + 发布时间 |

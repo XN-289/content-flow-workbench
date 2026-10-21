@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>本地采集桥接</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; font: 15px/1.6 system-ui, sans-serif; color: #28303f; background: #f5f7fb; }
+    main { width: min(420px, calc(100vw - 40px)); padding: 24px; border: 1px solid #d8e0ea; border-radius: 8px; background: #fff; }
+    h1 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0; color: #5d687a; overflow-wrap: anywhere; }
+    .error { color: #a33; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>本地采集桥接</h1>
+  <p id="status">正在等待小红书页面发送采集数据...</p>
+</main>
+<script>
+  const allowedOpenerOrigin = "https://www.xiaohongshu.com";
+  const localOrigin = window.location.origin;
+  const status = document.getElementById("status");
+
+  function setStatus(message, isError = false) {
+    status.textContent = message;
+    status.className = isError ? "error" : "";
+  }
+
+  window.addEventListener("message", async (event) => {
+    if (event.origin !== allowedOpenerOrigin || event.source !== window.opener) return;
+    if (event.data?.type === "workbench-bridge-ready") return;
+    if (event.data?.type === "workbench-profile-capture") {
+      const { sourceId, token, items, blockedItems, context } = event.data;
+      const validItems = Array.isArray(items) ? items : null;
+      const validBlockedItems = Array.isArray(blockedItems) ? blockedItems : null;
+      if (!sourceId || !token || !context || typeof context !== "object"
+        || !validItems || !validBlockedItems || validItems.length + validBlockedItems.length === 0) {
+        setStatus("主页采集数据不完整。", true);
+        event.source.postMessage({ type: "workbench-profile-capture-result", ok: false, error: "invalid capture payload" }, event.origin);
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/browser-capture", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-capture-token": token
+          },
+          body: JSON.stringify({ sourceId, items: validItems, blockedItems: validBlockedItems, context })
+        });
+        const payload = await response.json();
+        if (!response.ok || payload.ok === false) throw new Error(payload.error || "HTTP " + response.status);
+        setStatus("主页快照已保存，正在关闭...");
+        event.source.postMessage({
+          type: "workbench-profile-capture-result",
+          ok: true,
+          run: payload.run
+        }, event.origin);
+        setTimeout(() => window.close(), 400);
+      } catch (error) {
+        setStatus("本地提交失败：" + error.message, true);
+        event.source.postMessage({
+          type: "workbench-profile-capture-result",
+          ok: false,
+          error: error.message
+        }, event.origin);
+      }
+      return;
+    }
+
+    if (event.data?.type !== "workbench-detail-capture") return;
+
+    const { signalId, sourceId, token, capture } = event.data;
+    if (!signalId || !sourceId || !token || !capture || typeof capture !== "object") {
+      setStatus("采集数据不完整。", true);
+      event.source.postMessage({ type: "workbench-detail-capture-result", ok: false, error: "invalid capture payload" }, event.origin);
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/browser-detail-capture", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-capture-token": token
+        },
+        body: JSON.stringify({ signalId, sourceId, capture })
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) throw new Error(payload.error || "HTTP " + response.status);
+      setStatus("采集完成，正在关闭...");
+      event.source.postMessage({
+        type: "workbench-detail-capture-result",
+        ok: true,
+        signal: payload.signal
+      }, event.origin);
+      setTimeout(() => window.close(), 400);
+    } catch (error) {
+      setStatus("本地提交失败：" + error.message, true);
+      event.source.postMessage({
+        type: "workbench-detail-capture-result",
+        ok: false,
+        error: error.message
+      }, event.origin);
+    }
+  });
+
+  if (window.opener) {
+    window.opener.postMessage({ type: "workbench-bridge-ready" }, allowedOpenerOrigin);
+  } else {
+    setStatus("没有找到发起采集的小红书页面。", true);
+  }
+</script>
+</body>
+</html>

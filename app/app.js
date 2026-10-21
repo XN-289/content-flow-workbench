@@ -52,6 +52,7 @@ const publicationStatusVariants = {
 };
 
 const publicationPlatforms = ["douyin", "xiaohongshu", "wechat", "x"];
+const requiredPublicationPlatforms = ["douyin", "xiaohongshu", "wechat"];
 const publicationStatusOrder = ["not-ready", "manual", "failed", "skipped", "published"];
 
 const methodLabels = {
@@ -93,6 +94,12 @@ const evidenceVerificationLabels = {
   unverified: "证据待核对",
   verified: "证据已核对",
   rejected: "证据弃用"
+};
+const transcriptStatusLabels = {
+  captured: "已取得",
+  missing: "缺失",
+  blocked: "受限",
+  failed: "转写失败"
 };
 
 const agentLabels = {
@@ -136,10 +143,43 @@ const triggerLabels = {
   "quick-capture": "快速粘贴"
 };
 
+const capabilityStatusLabels = {
+  complete: "完整支持",
+  partial: "部分支持",
+  unsupported: "不支持自动",
+  unknown: "待确认"
+};
+
+const capabilityStatusVariants = {
+  complete: "accent",
+  partial: "warn",
+  unsupported: "",
+  unknown: "info"
+};
+
+const morningStatusLabels = {
+  ok: "正常",
+  ready: "可处理",
+  attention: "需关注",
+  blocked: "已阻塞",
+  running: "运行中",
+  waiting: "等待中"
+};
+
+const morningStatusVariants = {
+  ok: "accent",
+  ready: "info",
+  attention: "warn",
+  blocked: "danger",
+  running: "info",
+  waiting: ""
+};
+
 const coverageLabels = {
   unknown: "覆盖范围待确认",
   partial: "历史补采未完成",
-  complete: "已覆盖显示总数"
+  complete: "已覆盖显示总数",
+  blocked: "主页可见但缺少可打开笔记 ID"
 };
 
 const controlStatusLabels = {
@@ -208,6 +248,8 @@ let materialQuery = "";
 let backups = null;
 let backupRoot = "";
 let backupRetentionLimit = 100;
+const workflowFocusStorageKey = "workbench-workflow-focus-topic";
+let workflowFocusTopicId = localStorage.getItem(workflowFocusStorageKey) || "";
 
 const appNav = document.getElementById("nav");
 const viewEl = document.getElementById("view");
@@ -284,6 +326,184 @@ function topicById(id) {
   return state.topics.find((topic) => topic.id === id);
 }
 
+function topicScripts(topicId) {
+  return state.scripts.filter((script) => script.topicId === topicId);
+}
+
+function topicPublications(topicId) {
+  return state.publications.filter((item) => item.topicId === topicId);
+}
+
+function topicReviews(topicId) {
+  return state.reviews.filter((review) => review.topicId === topicId);
+}
+
+function setWorkflowFocusTopic(topicId) {
+  if (!topicById(topicId)) return;
+  workflowFocusTopicId = topicId;
+  localStorage.setItem(workflowFocusStorageKey, topicId);
+}
+
+function activeWorkflowTopic() {
+  if (!state) return null;
+  const selected = state.topics.find((topic) => topic.id === workflowFocusTopicId);
+  if (selected) return selected;
+  const topic = state.topics.find((item) => !["published", "reviewed"].includes(item.stage))
+    || state.topics.find((item) => item.stage === "published")
+    || state.topics[0]
+    || null;
+  workflowFocusTopicId = topic?.id || "";
+  if (topic) localStorage.setItem(workflowFocusStorageKey, topic.id);
+  return topic;
+}
+
+function workflowStageGroup(stage) {
+  if (["topic", "outline", "draft", "production", "review"].includes(stage)) return "production";
+  if (["ready-to-publish", "published"].includes(stage)) return "publish";
+  return "review";
+}
+
+function workflowPipelineStageKey(stage) {
+  if (stage === "topic") return "topic";
+  if (["outline", "draft"].includes(stage)) return "outline";
+  if (["production", "review"].includes(stage)) return "production";
+  if (["ready-to-publish", "published"].includes(stage)) return "publish";
+  return "review";
+}
+
+function workflowPublishedPlatforms(topicId) {
+  return new Set(
+    topicPublications(topicId)
+      .filter((item) => item.status === "published")
+      .map((item) => item.platform)
+  );
+}
+
+function workflowGuidance(topic) {
+  if (!topic) {
+    return {
+      title: "先建立一条真正想做的选题",
+      detail: "把标题、核心观点、目标读者和最小版本补齐，再进入制作。",
+      actionLabel: "打开选题库",
+      command: "open",
+      target: "workflow-topics"
+    };
+  }
+
+  const missingGates = Object.keys(gateLabels).filter((key) => topic.gates?.[key] !== true).length;
+  const missingChecks = Object.keys(productionCheckLabels).filter((key) => topic.productionChecks?.[key] !== true).length;
+  const publishedPlatforms = workflowPublishedPlatforms(topic.id);
+  const missingPlatforms = requiredPublicationPlatforms.filter((platform) => !publishedPlatforms.has(platform));
+
+  if (topic.stage === "topic") {
+    return {
+      title: "先把选题推进到提纲",
+      detail: `当前选题信息已成形。下一步只确认方向，不急着写全文。`,
+      actionLabel: "推进到提纲",
+      command: "advance",
+      target: "workflow-production"
+    };
+  }
+  if (topic.stage === "outline") {
+    return {
+      title: "写第一版口播稿",
+      detail: "优先完成能讲通的一版，保存后会自动进入草稿阶段。",
+      actionLabel: "打开写稿区",
+      command: "open",
+      target: "workflow-production"
+    };
+  }
+  if (topic.stage === "draft") {
+    return {
+      title: "继续打磨并收齐制作证据",
+      detail: `七项检查还差 ${missingChecks} 项，四个人工关卡还差 ${missingGates} 项。`,
+      actionLabel: "继续制作",
+      command: "open",
+      target: "workflow-production"
+    };
+  }
+  if (topic.stage === "production") {
+    if (missingGates) {
+      return {
+        title: `人工关卡还差 ${missingGates} 项`,
+        detail: "证据、开头、样片和终审全部通过后才能进入待审。",
+        actionLabel: "完成关卡",
+        command: "open",
+        target: "workflow-production"
+      };
+    }
+    return {
+      title: "制作关卡已全部通过",
+      detail: "可以进入待审，并补齐七项生产检查。",
+      actionLabel: "进入待审",
+      command: "advance",
+      target: "workflow-production"
+    };
+  }
+  if (topic.stage === "review") {
+    if (missingChecks) {
+      return {
+        title: `生产检查还差 ${missingChecks} 项`,
+        detail: "检查项全部通过后才能进入待发布阶段。",
+        actionLabel: "补齐检查",
+        command: "open",
+        target: "workflow-production"
+      };
+    }
+    return {
+      title: "生产检查已全部通过",
+      detail: "可以进入待发布，并开始记录三个必需平台。",
+      actionLabel: "进入待发",
+      command: "advance",
+      target: "workflow-publish"
+    };
+  }
+  if (topic.stage === "ready-to-publish") {
+    return {
+      title: missingPlatforms.length
+        ? `还差 ${missingPlatforms.length} 个必需平台`
+        : "三个必需平台已记录",
+      detail: missingPlatforms.length
+        ? `待落：${missingPlatforms.map((platform) => platformLabels[platform]).join("、")}。`
+        : "补完最后一条发布记录后会自动进入已发布。",
+      actionLabel: "打开发布台账",
+      command: "open",
+      target: "workflow-publish"
+    };
+  }
+  if (topic.stage === "published") {
+    return {
+      title: "发布已完成，开始复盘",
+      detail: "记录结果、评论和下一次改法，保存后本循环进入已复盘。",
+      actionLabel: "开始复盘",
+      command: "open",
+      target: "workflow-review"
+    };
+  }
+  return {
+    title: "本循环已经闭环",
+    detail: "正文、发布记录和复盘都保留在当前选题里，可直接回看或开始下一条。",
+    actionLabel: "回看本循环",
+    command: "open",
+    target: "workflow-review"
+  };
+}
+
+function preferredScrollBehavior() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
+
+function openWorkflowPanel(panelId) {
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  let details = panel.closest("details");
+  while (details) {
+    details.open = true;
+    details = details.parentElement?.closest("details") || null;
+  }
+  panel.scrollIntoView({ behavior: preferredScrollBehavior(), block: "start" });
+}
+
 function browserCaptureToken(sourceId) {
   const record = (state.runtime?.browserCapture || []).find((item) => item.sourceId === sourceId);
   if (!record) throw new Error("采集 token 不存在，请刷新工作台后重新复制采集书签。");
@@ -302,6 +522,7 @@ function sourceOptions(selectedId = "") {
 
 function xhsCollectorSource(sourceId) {
   const endpoint = `http://127.0.0.1:${window.location.port || "5177"}/api/browser-capture`;
+  const localOrigin = new URL(endpoint).origin;
   const expectedProfile = sourceById(sourceId)?.url.match(/\/user\/profile\/([A-Za-z0-9]+)/)?.[1] || "";
   return `
 (async () => {
@@ -316,11 +537,18 @@ function xhsCollectorSource(sourceId) {
   }
 
   const sourceId = ${JSON.stringify(sourceId)};
-  const notesRoot = window.__INITIAL_STATE__?.user?.notes?._rawValue
-    || window.__INITIAL_STATE__?.user?.notes
-    || [];
+  const bridgeOrigin = ${JSON.stringify(localOrigin)};
+  const unwrap = (value) => {
+    let current = value;
+    for (let index = 0; index < 6 && current && typeof current === "object" && "_rawValue" in current; index += 1) {
+      current = current._rawValue;
+    }
+    return current;
+  };
+  const notesRoot = unwrap(window.__INITIAL_STATE__?.user?.notes) || [];
   const groups = Array.isArray(notesRoot) ? notesRoot : Object.values(notesRoot || {});
   const items = [];
+  const blockedItems = [];
   const seen = new Set();
   const countFromText = (value) => {
     if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.round(value);
@@ -331,27 +559,69 @@ function xhsCollectorSource(sourceId) {
     const multiplier = match[2] === "亿" ? 100000000 : match[2] === "万" ? 10000 : match[2] ? 1000 : 1;
     return Math.round(base * multiplier);
   };
-  const profileState = window.__INITIAL_STATE__?.user?.userPageData || {};
+  const profileState = unwrap(window.__INITIAL_STATE__?.user?.userPageData) || {};
+  const profileInteractions = Array.isArray(unwrap(profileState.interactions)) ? unwrap(profileState.interactions) : [];
+  const profileInteractionCount = (type) => profileInteractions.find((item) => item?.type === type)?.count || "";
   const pageText = document.body?.innerText || "";
   const noteTextMatch = pageText.match(/([\\d,.]+)\\s*(万|亿|[kK])?\\s*(?:篇)?笔记/);
   const followerTextMatch = pageText.match(/([\\d,.]+)\\s*(万|亿|[kK])?\\s*(?:个)?粉丝/);
+  const engagementTextMatch = pageText.match(/([\\d,.]+)\\s*(万|亿|[kK])?\\s*\\+?\\s*(?:次)?(?:获)?赞与收藏/);
   const context = {
-    profileNoteCount: countFromText(profileState.notes) || countFromText(noteTextMatch?.[0]),
-    profileFollowers: countFromText(profileState.followers) || countFromText(followerTextMatch?.[0])
+    profileNoteCount: countFromText(profileState.posted) || countFromText(noteTextMatch?.[0]),
+    profileFollowers: countFromText(profileInteractionCount("fans")) || countFromText(followerTextMatch?.[0]),
+    profileEngagement: countFromText(profileInteractionCount("interaction")) || countFromText(engagementTextMatch?.[0]),
+    captureScope: "user-visible-profile-state",
+    autoScroll: false,
+    privateApiCalled: false
+  };
+  const allowedCoverUrl = (value) => {
+    if (!/^https?:\\/\\//i.test(String(value || ""))) return "";
+    try {
+      const url = new URL(value);
+      const host = url.hostname.toLowerCase();
+      return host.endsWith(".xiaohongshu.com") || host.endsWith(".xhscdn.com") || host.endsWith(".xhscdn.net")
+        ? url.toString()
+        : "";
+    } catch {
+      return "";
+    }
   };
 
   for (const group of groups) {
-    const list = Array.isArray(group) ? group : Object.values(group || {});
+    const unwrappedGroup = unwrap(group);
+    const list = Array.isArray(unwrappedGroup) ? unwrappedGroup : Object.values(unwrappedGroup || {});
     for (const entry of list) {
       if (!entry || typeof entry !== "object") continue;
-      const note = entry.noteCard || entry.note_card || {};
-      const noteId = entry.id || entry.noteId || entry.note_id || note.noteId || note.note_id;
-      if (!noteId || seen.has(noteId)) continue;
+      const unwrappedEntry = unwrap(entry);
+      if (!unwrappedEntry || typeof unwrappedEntry !== "object") continue;
+      const note = unwrap(unwrappedEntry.noteCard) || unwrap(unwrappedEntry.note_card) || {};
+      const noteId = String(
+        unwrap(unwrappedEntry.id) || unwrap(unwrappedEntry.noteId) || unwrap(unwrappedEntry.note_id)
+        || unwrap(note.noteId) || unwrap(note.note_id) || ""
+      ).trim();
+      if (!noteId) {
+        const blockedInteraction = unwrap(note.interactInfo) || unwrap(note.interact_info) || {};
+        const blockedTime = Number(unwrap(note.time) || unwrap(unwrappedEntry.time) || 0);
+        const blockedTimestamp = blockedTime > 0 && blockedTime < 10000000000 ? blockedTime * 1000 : blockedTime;
+        const blockedDate = blockedTimestamp > 0 ? new Date(blockedTimestamp) : null;
+        blockedItems.push({
+          title: unwrap(note.displayTitle) || unwrap(note.title) || unwrap(note.desc) || "",
+          engagement: String(unwrap(blockedInteraction.likedCount) || unwrap(blockedInteraction.liked_count) || unwrap(blockedInteraction.liked) || ""),
+          publishedAt: blockedDate && !Number.isNaN(blockedDate.getTime()) ? blockedDate.toISOString() : "",
+          coverUrl: allowedCoverUrl(unwrap(unwrap(note.cover)?.urlDefault) || unwrap(unwrap(note.cover)?.url)),
+          xsecToken: unwrap(unwrappedEntry.xsecToken) || unwrap(note.xsecToken) || "",
+          noteId: "",
+          reason: "note-id-unavailable"
+        });
+        continue;
+      }
+      if (seen.has(noteId)) continue;
 
-      const token = entry.xsecToken || entry.xsec_token || "";
-      const interaction = entry.interactInfo || entry.interact_info || note.interactInfo || note.interact_info || {};
-      const engagement = interaction.likedCount || interaction.liked_count || interaction.liked || "";
-      const timeValue = Number(entry.time || note.time || entry.lastUpdateTime || note.last_update_time || 0);
+      const token = unwrap(unwrappedEntry.xsecToken) || unwrap(unwrappedEntry.xsec_token) || unwrap(note.xsecToken) || "";
+      const interaction = unwrap(unwrappedEntry.interactInfo) || unwrap(unwrappedEntry.interact_info)
+        || unwrap(note.interactInfo) || unwrap(note.interact_info) || {};
+      const engagement = unwrap(interaction.likedCount) || unwrap(interaction.liked_count) || unwrap(interaction.liked) || "";
+      const timeValue = Number(unwrap(unwrappedEntry.time) || unwrap(note.time) || unwrap(note.lastUpdateTime) || 0);
       const timestamp = timeValue > 0 && timeValue < 10000000000 ? timeValue * 1000 : timeValue;
       const date = timestamp > 0 ? new Date(timestamp) : null;
       const query = token
@@ -360,7 +630,7 @@ function xhsCollectorSource(sourceId) {
 
       seen.add(noteId);
       items.push({
-        title: entry.displayTitle || entry.display_title || note.displayTitle || note.title || note.desc || noteId,
+        title: unwrap(unwrappedEntry.displayTitle) || unwrap(unwrappedEntry.display_title) || unwrap(note.displayTitle) || unwrap(note.title) || unwrap(note.desc) || noteId,
         url: "https://www.xiaohongshu.com/explore/" + encodeURIComponent(noteId) + query,
         engagement: String(engagement || ""),
         publishedAt: date && !Number.isNaN(date.getTime()) ? date.toISOString() : "",
@@ -369,34 +639,79 @@ function xhsCollectorSource(sourceId) {
     }
   }
 
-  if (!items.length) {
-    alert("页面状态里没有可用笔记。请先停留在“笔记”页签；如列表未加载完，先手动滚动，再重新点击。");
+  if (!items.length && !blockedItems.length) {
+    alert("页面状态里没有可见笔记。请先停留在“笔记”页签；如列表未加载完，先手动滚动，再重新点击。");
     return;
   }
 
   try {
-    const response = await fetch(${JSON.stringify(endpoint)}, {
-      method: "POST",
-      mode: "cors",
-      credentials: "omit",
-      headers: {
-        "content-type": "application/json",
-        "x-capture-token": ${JSON.stringify(browserCaptureToken(sourceId))}
-      },
-      body: JSON.stringify({ sourceId, items, context })
-    });
-    const payload = await response.json();
-    if (!response.ok || payload.ok === false) throw new Error(payload.error || "HTTP " + response.status);
-    let message = "采集完成：发现 " + payload.run.found + " 条，新增 " + payload.run.created + " 条。";
-    if (payload.run.profileNoteCount) {
-      message += "\\n本页已加载 " + payload.run.loadedCount + " 条，主页显示 " + payload.run.profileNoteCount + " 条，工作台累计 " + payload.run.collectedCount + " 条。";
+    const captureToken = ${JSON.stringify(browserCaptureToken(sourceId))};
+    let resolveBridgeReady;
+    let resolveBridgeResult;
+    const bridgeReady = new Promise((resolve) => { resolveBridgeReady = resolve; });
+    const bridgeResult = new Promise((resolve) => { resolveBridgeResult = resolve; });
+    window.addEventListener("message", (event) => {
+      if (event.origin !== bridgeOrigin) return;
+      if (event.data?.type === "workbench-bridge-ready") {
+        resolveBridgeReady(true);
+        return;
+      }
+      if (event.data?.type === "workbench-profile-capture-result") {
+        resolveBridgeReady(false);
+        resolveBridgeResult(event.data);
+      }
+    }, { once: false });
+    const bridgeWindow = window.open(bridgeOrigin + "/capture-bridge.html", "_blank", "width=520,height=420");
+    let payload = null;
+    if (bridgeWindow) {
+      const ready = await Promise.race([
+        bridgeReady,
+        new Promise((resolve) => setTimeout(() => resolve(false), 15000))
+      ]);
+      if (ready) {
+        bridgeWindow.postMessage({
+          type: "workbench-profile-capture",
+          sourceId,
+          token: captureToken,
+          items,
+          blockedItems,
+          context
+        }, bridgeOrigin);
+        payload = await Promise.race([
+          bridgeResult,
+          new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: "本地桥接页没有返回结果" }), 20000))
+        ]);
+        if (payload.ok === false) throw new Error(payload.error || "本地桥接提交失败");
+      }
+    }
+    if (!payload) {
+      const response = await fetch(${JSON.stringify(endpoint)}, {
+        method: "POST",
+        mode: "cors",
+        credentials: "omit",
+        headers: {
+          "content-type": "application/json",
+          "x-capture-token": captureToken
+        },
+        body: JSON.stringify({ sourceId, items, blockedItems, context })
+      });
+      payload = await response.json();
+      if (!response.ok || payload.ok === false) throw new Error(payload.error || "HTTP " + response.status);
+    }
+    let message = payload.run.blockedNoteCount
+      ? "主页快照已保存：可见 " + payload.run.loadedCount + " 条，其中 " + payload.run.blockedNoteCount + " 条缺少可打开 noteId，暂不进入 Inbox。"
+      : "采集完成：发现 " + payload.run.found + " 条，新增 " + payload.run.created + " 条。";
+    if (payload.run.coverageStatus === "blocked") {
+      message += "\\n当前游客态无法生成笔记详情链接。想补正文或逐字稿时，请从 App 分享这条笔记，再用详情书签采集。";
+    } else if (payload.run.profileNoteCount) {
+      message += "\\n主页显示 " + payload.run.profileNoteCount + " 条，工作台已入库 " + payload.run.collectedCount + " 条。";
     } else {
       message += "\\n本页已加载 " + payload.run.loadedCount + " 条；未识别到主页总笔记数，请继续滚动补齐目标范围。";
     }
     alert(message);
   } catch (error) {
-    console.error("Personal Content Workbench capture", items, error);
-    alert("直连本地工作台失败：" + error.message + "。已在控制台输出 items，可复制后回到账号页手动导入。");
+    console.error("Personal Content Workbench capture", { items, blockedItems, context }, error);
+    alert("本地提交失败：" + error.message + "。已在控制台输出本次可见快照。");
   }
 })();
 `.trim();
@@ -406,11 +721,269 @@ function xhsBookmarkletHref(sourceId) {
   return `javascript:${encodeURIComponent(xhsCollectorSource(sourceId))}`;
 }
 
-function topicOptions(selectedId = "") {
-  if (!state.topics.length) return `<option value="">先添加选题</option>`;
-  return state.topics.map((topic) => (
-    `<option value="${escapeHtml(topic.id)}" ${topic.id === selectedId ? "selected" : ""}>${escapeHtml(topic.title)}</option>`
-  )).join("");
+function xhsDetailCollectorSource(signal) {
+  const endpoint = `http://127.0.0.1:${window.location.port || "5177"}/api/browser-detail-capture`;
+  const expectedCaptureUrl = String(signal.url || "");
+  const expectedMatch = String(signal.url || "").match(/\/(?:explore|discovery\/item)\/([A-Za-z0-9_-]+)|\/user\/profile\/[A-Za-z0-9_-]+\/([A-Za-z0-9_-]+)/);
+  const expectedNoteId = expectedMatch?.[1] || expectedMatch?.[2] || "";
+  return `
+(async () => {
+  if (location.hostname !== "www.xiaohongshu.com") {
+    alert("请在小红书笔记详情页运行这个采集脚本。");
+    return;
+  }
+  const currentMatch = location.pathname.match(/\\/(?:explore|discovery\\/item)\\/([A-Za-z0-9_-]+)|\\/user\\/profile\\/[A-Za-z0-9_-]+\\/([A-Za-z0-9_-]+)/);
+  const currentNoteId = currentMatch?.[1] || currentMatch?.[2] || "";
+  const expectedNoteId = ${JSON.stringify(expectedNoteId)};
+  const rawPageText = (document.body?.innerText || "").slice(0, 100000);
+  const visibleRoute = decodeURIComponent(location.href) + "\\n" + rawPageText;
+  const blockedPage = currentNoteId !== expectedNoteId && /(当前笔记暂时无法浏览|扫码登录后查看完整内容|访问受限|操作过于频繁|页面不见了|安全限制|访问链接异常)/.test(visibleRoute);
+  if (!expectedNoteId || (currentNoteId !== expectedNoteId && !blockedPage)) {
+    alert("当前详情页和工作台信号不匹配，请先打开这条信号的链接。");
+    return;
+  }
+
+  const localOrigin = new URL(${JSON.stringify(endpoint)}).origin;
+  const captureToken = ${JSON.stringify(browserCaptureToken(signal.sourceId))};
+  let resolveBridgeReady;
+  let resolveBridgeResult;
+  const bridgeReady = new Promise((resolve) => { resolveBridgeReady = resolve; });
+  const bridgeResult = new Promise((resolve) => { resolveBridgeResult = resolve; });
+  window.addEventListener("message", (event) => {
+    if (event.origin !== localOrigin) return;
+    if (event.data?.type === "workbench-bridge-ready") {
+      resolveBridgeReady(true);
+      return;
+    }
+    if (event.data?.type === "workbench-detail-capture-result") {
+      resolveBridgeReady(false);
+      resolveBridgeResult(event.data);
+    }
+  }, { once: false });
+  const bridgeWindow = window.open(localOrigin + "/capture-bridge.html", "_blank", "width=520,height=420");
+  if (!bridgeWindow) resolveBridgeReady(false);
+
+  const unwrap = (value) => {
+    let current = value;
+    for (let index = 0; index < 6 && current && typeof current === "object" && "_rawValue" in current; index += 1) {
+      current = current._rawValue;
+    }
+    return current;
+  };
+  const firstString = (value, keys) => {
+    for (const key of keys) {
+      const item = unwrap(value?.[key]);
+      if (typeof item === "string" && item.trim()) return item.trim();
+    }
+    return "";
+  };
+  const countFromText = (value) => {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return String(Math.round(value));
+    return String(value || "").trim();
+  };
+  const allowedMediaUrl = (value) => {
+    if (!/^https?:\\/\\//i.test(String(value || ""))) return "";
+    try {
+      const url = new URL(value);
+      const host = url.hostname.toLowerCase();
+      const allowed = host.endsWith(".xiaohongshu.com") || host === "xiaohongshu.com"
+        || host.endsWith(".xhscdn.com") || host === "xhscdn.com"
+        || host.endsWith(".xhscdn.net") || host === "xhscdn.net";
+      return allowed ? url.toString() : "";
+    } catch {
+      return "";
+    }
+  };
+  const mediaFromObject = (value, depth = 0, output = [], seenObjects = new Set()) => {
+    if (!value || typeof value !== "object" || depth > 5 || output.length >= 30) return output;
+    if (seenObjects.has(value)) return output;
+    seenObjects.add(value);
+    const mediaUrlKeys = ["urlDefault", "url", "originalUrl", "masterUrl", "backupUrls", "master_url", "backup_urls"];
+    const directUrls = mediaUrlKeys.flatMap((key) => {
+      const item = unwrap(value[key]);
+      if (typeof item === "string") return [item];
+      if (Array.isArray(item)) return item.filter((entry) => typeof entry === "string");
+      return [];
+    });
+    for (const candidate of directUrls) {
+      const url = allowedMediaUrl(candidate);
+      if (!url || output.some((item) => item.url === url)) continue;
+      const lower = url.toLowerCase();
+      const isVideo = /\\.(mp4|m3u8)(?:[?#]|$)/.test(lower) || /master|stream|video/i.test(url);
+      output.push({ type: isVideo ? "video" : "image", url, description: firstString(value, ["desc", "description", "alt", "title"]) });
+      if (output.length >= 30) return output;
+    }
+    for (const entry of Object.values(value)) {
+      const child = unwrap(entry);
+      if (child && typeof child === "object") mediaFromObject(child, depth + 1, output, seenObjects);
+    }
+    return output;
+  };
+  const subtitleUrls = [];
+  const findSubtitleUrl = (value, key = "", depth = 0, seenObjects = new Set()) => {
+    if (!value || typeof value !== "object" || depth > 6 || seenObjects.has(value)) return;
+    seenObjects.add(value);
+    for (const [childKey, entry] of Object.entries(value)) {
+      const child = unwrap(entry);
+      if (typeof child === "string" && /subtitle|caption/i.test(childKey) && /^https?:\\/\\//i.test(child)) {
+        subtitleUrls.push(child);
+      } else if (child && typeof child === "object") {
+        findSubtitleUrl(child, childKey, depth + 1, seenObjects);
+      }
+    }
+  };
+
+  const pageState = unwrap(window.__INITIAL_STATE__ || {});
+  const noteMap = unwrap(pageState?.note?.noteDetailMap);
+  const roots = [
+    noteMap?.[currentNoteId],
+    unwrap(noteMap?.[currentNoteId]?.note),
+    unwrap(pageState?.noteData?.data),
+    unwrap(pageState?.noteData),
+    pageState
+  ].filter(Boolean);
+  const queue = roots.map((root) => [root, 0]);
+  const seenObjects = new Set();
+  const detailCandidates = [];
+  while (queue.length && detailCandidates.length < 50) {
+    const [value, depth] = queue.shift();
+    if (!value || typeof value !== "object" || depth > 8 || seenObjects.has(value)) continue;
+    seenObjects.add(value);
+    const note = unwrap(value.note);
+    const source = note || value;
+    const title = firstString(source, ["title", "displayTitle", "display_title"]);
+    const desc = firstString(source, ["desc", "description", "content"]);
+    const noteId = firstString(source, ["noteId", "note_id", "id"]);
+    if ((title || desc) && (noteId === currentNoteId || value === roots[0] || value === roots[1])) {
+      detailCandidates.push(source);
+    }
+    for (const entry of Object.values(value)) {
+      const child = unwrap(entry);
+      if (child && typeof child === "object") queue.push([child, depth + 1]);
+    }
+  }
+  const detail = detailCandidates[0] || {};
+  const detailNote = unwrap(detail.note) || detail;
+  findSubtitleUrl(pageState);
+
+  let trackText = "";
+  for (const video of Array.from(document.querySelectorAll("video"))) {
+    for (const track of Array.from(video.textTracks || [])) {
+      if (track.mode === "disabled") track.mode = "hidden";
+      const cues = Array.from(track.cues || []).map((cue) => cue.text || "").join("\\n").trim();
+      if (cues) {
+        trackText = cues;
+        break;
+      }
+    }
+    if (trackText) break;
+  }
+  const stateTranscript = firstString(detailNote, ["transcriptText", "transcript", "subtitleText"]);
+  const transcriptText = trackText || (/^https?:\\/\\//i.test(stateTranscript) ? "" : stateTranscript);
+  const mediaItems = mediaFromObject(detailNote);
+  const coverCandidate = firstString(unwrap(detailNote.cover), ["urlDefault", "url", "originalUrl"]);
+  const domTitle = document.querySelector("#detail-title, h1")?.textContent?.trim() || "";
+  const metaTitle = document.querySelector('meta[property="og:title"]')?.content?.trim() || "";
+  const domDesc = document.querySelector("#detail-desc, [class*='desc']")?.textContent?.trim() || "";
+  const title = firstString(detailNote, ["title", "displayTitle", "display_title"]) || domTitle || metaTitle || document.title.replace(/ - 小红书$/, "");
+  const contentText = firstString(detailNote, ["desc", "description", "content"]) || domDesc;
+  const authorObject = unwrap(detailNote.user);
+  const author = firstString(authorObject, ["nickname", "nickName", "name"]) || ${JSON.stringify(signal.author || "")};
+  const timeValue = Number(detailNote.time || detailNote.lastUpdateTime || detailNote.last_update_time || 0);
+  const timestamp = timeValue > 0 && timeValue < 10000000000 ? timeValue * 1000 : timeValue;
+  const interaction = unwrap(detailNote.interactInfo) || unwrap(detailNote.interact_info) || {};
+  const engagement = countFromText(interaction.likedCount || interaction.liked_count || interaction.liked || "");
+  const hasPageEvidence = Boolean(title || contentText || mediaItems.length || rawPageText);
+  const blockedText = /(验证码|滑块|拖动滑块|访问受限|操作过于频繁|异常|扫码登录后查看完整内容)/.test(rawPageText);
+  if (!hasPageEvidence) {
+    alert("当前页面没有可采集的详情内容。");
+    return;
+  }
+
+  const capture = blockedPage ? {
+    noteId: expectedNoteId,
+    captureUrl: ${JSON.stringify(expectedCaptureUrl)},
+    effectiveUrl: location.href,
+    title: "",
+    author: "",
+    contentText: "",
+    coverUrl: "",
+    mediaItems: [],
+    transcriptText: "",
+    transcriptStatus: "blocked",
+    transcriptNote: "笔记详情页被登录墙、删除、下架或风控重定向，未取得内容、封面、媒体和逐字稿。",
+    rawPageText
+  } : {
+    noteId: currentNoteId,
+    captureUrl: location.href,
+    title,
+    author,
+    contentText,
+    coverUrl: allowedMediaUrl(coverCandidate) || (mediaItems[0]?.type === "image" ? mediaItems[0].url : ""),
+    mediaItems,
+    publishedAt: timestamp ? new Date(timestamp).toISOString() : "",
+    engagement,
+    transcriptText,
+    transcriptStatus: transcriptText ? "captured" : blockedText && !contentText ? "blocked" : "missing",
+    transcriptSource: transcriptText ? (trackText ? "video-text-tracks" : "page-state") : "",
+    transcriptNote: transcriptText ? "" : subtitleUrls.length ? "页面暴露了字幕文件链接，但本版不下载或解析文件，未生成逐字稿。" : "",
+    rawPageText
+  };
+
+  try {
+    let payload = null;
+    if (bridgeWindow) {
+      const ready = await Promise.race([
+        bridgeReady,
+        new Promise((resolve) => setTimeout(() => resolve(false), 15000))
+      ]);
+      if (ready) {
+        bridgeWindow.postMessage({
+          type: "workbench-detail-capture",
+          signalId: ${JSON.stringify(signal.id)},
+          sourceId: ${JSON.stringify(signal.sourceId)},
+          token: captureToken,
+          capture
+        }, localOrigin);
+        payload = await Promise.race([
+          bridgeResult,
+          new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: "本地桥接页没有返回结果" }), 20000))
+        ]);
+        if (payload.ok === false) throw new Error(payload.error || "本地桥接提交失败");
+      }
+    }
+    if (!payload) {
+      const response = await fetch(${JSON.stringify(endpoint)}, {
+        method: "POST",
+        mode: "cors",
+        credentials: "omit",
+        headers: {
+          "content-type": "application/json",
+          "x-capture-token": captureToken
+        },
+        body: JSON.stringify({
+          signalId: ${JSON.stringify(signal.id)},
+          sourceId: ${JSON.stringify(signal.sourceId)},
+          capture
+        })
+      });
+      payload = await response.json();
+      if (!response.ok || payload.ok === false) throw new Error(payload.error || "HTTP " + response.status);
+    }
+    const transcript = payload.signal.transcriptStatus === "captured"
+      ? "已取得 " + payload.signal.transcriptText.length + " 字"
+      : payload.signal.transcriptStatus === "blocked" ? "被页面限制" : "当前可见范围缺失";
+    alert("详情采集完成：正文 " + (payload.signal.contentText || "").length + " 字，媒体 " + (payload.signal.mediaItems || []).length + " 项，逐字稿" + transcript + "。");
+  } catch (error) {
+    console.error("Personal Content Workbench detail capture", capture, error);
+    alert("直连本地工作台失败：" + error.message + "。已在控制台输出 capture，请复制后交给工作台。");
+  }
+})();
+`.trim();
+}
+
+function xhsDetailBookmarkletHref(signal) {
+  return `javascript:${encodeURIComponent(xhsDetailCollectorSource(signal))}`;
 }
 
 function tag(text, variant = "") {
@@ -422,6 +995,41 @@ function displayDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function normalizeScriptText(value) {
+  return String(value ?? "").replace(/\r\n?/g, "\n").trim();
+}
+
+function scriptCharacterCount(value) {
+  return Array.from(normalizeScriptText(value).replace(/\s/g, "")).length;
+}
+
+function shortenText(value, limit = 52) {
+  const characters = Array.from(String(value ?? "").replace(/\s+/g, " ").trim());
+  return characters.length > limit ? `${characters.slice(0, limit).join("")}...` : characters.join("");
+}
+
+function scriptChangeSummary(script, previousScript) {
+  const currentText = normalizeScriptText(script.text);
+  const currentCount = scriptCharacterCount(currentText);
+  if (!previousScript) return `首版 · ${currentCount} 字`;
+
+  const previousText = normalizeScriptText(previousScript.text);
+  if (currentText === previousText) return `与上一版正文一致 · ${currentCount} 字`;
+
+  const delta = currentCount - scriptCharacterCount(previousText);
+  const lengthChange = delta === 0 ? "字数不变" : `${delta > 0 ? "+" : ""}${delta} 字`;
+  const previousSegments = new Set(
+    (previousText.match(/[^。！？!?；;\n]+[。！？!?；;]?/g) || [])
+      .map((item) => item.trim())
+      .filter(Boolean)
+  );
+  const changedSegment = (currentText.match(/[^。！？!?；;\n]+[。！？!?；;]?/g) || [])
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .find((item) => !previousSegments.has(item));
+  return `${lengthChange} · ${changedSegment ? `本次改写：${shortenText(changedSegment)}` : "局部表达调整"}`;
 }
 
 function automationVariant(status) {
@@ -557,6 +1165,22 @@ function latestDailyBrief() {
   return (state.morningBriefs || []).find((brief) => brief.date === today) || null;
 }
 
+function renderMorningPipelineStages() {
+  const pipeline = state.runtime?.morningPipeline;
+  if (!pipeline) return "";
+  return `
+    <div class="morning-stage-list" aria-label="晨间流水线状态">
+      ${pipeline.stages.map((stage) => `
+        <button type="button" data-action="nav" data-view="${stage.view}" ${stage.anchor ? `data-anchor="${stage.anchor}"` : ""}>
+          <span>${escapeHtml(stage.label)}</span>
+          <strong>${escapeHtml(morningStatusLabels[stage.status] || stage.status)}</strong>
+          <small>${escapeHtml(stage.detail)}</small>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
 function readNumberInput(input) {
   const value = input.value.trim();
   if (!value) return null;
@@ -608,18 +1232,136 @@ function renderInformationFlow() {
   `;
 }
 
+function renderWorkflowFocus() {
+  const topic = activeWorkflowTopic();
+  const guidance = workflowGuidance(topic);
+  if (!topic) {
+    return `
+      <section class="workflow-focus workflow-focus-empty" aria-label="当前选题">
+        <div class="workflow-focus-head">
+          <div>
+            <p class="workflow-eyebrow">当前选题</p>
+            <h2 class="workflow-focus-title">还没有选题</h2>
+            <p class="workflow-focus-copy">从选题库建立第一条，之后制作、发布和复盘都会围绕它展开。</p>
+          </div>
+        </div>
+        <div class="workflow-next-step">
+          <div>
+            <span>下一步</span>
+            <strong>${escapeHtml(guidance.title)}</strong>
+            <p>${escapeHtml(guidance.detail)}</p>
+          </div>
+          <button type="button" class="primary-button" data-action="workflow-next" data-command="${guidance.command}" data-target="${guidance.target}">${escapeHtml(guidance.actionLabel)}</button>
+        </div>
+      </section>
+    `;
+  }
+
+  const scripts = topicScripts(topic.id);
+  const publications = topicPublications(topic.id);
+  const publishedPlatforms = workflowPublishedPlatforms(topic.id);
+  const publishedRequired = requiredPublicationPlatforms.filter((platform) => publishedPlatforms.has(platform)).length;
+  const reviews = topicReviews(topic.id);
+
+  return `
+    <section class="workflow-focus" aria-label="当前选题">
+      <div class="workflow-focus-head">
+        <div class="workflow-focus-identity">
+          <div class="workflow-focus-kicker">
+            <span class="workflow-eyebrow">当前选题</span>
+            ${tag(stageLabels[topic.stage] || topic.stage, topic.stage === "ready-to-publish" ? "warn" : "accent")}
+          </div>
+          <h2 class="workflow-focus-title">${escapeHtml(topic.title)}</h2>
+          <p class="workflow-focus-copy">${escapeHtml(topic.coreIdea || "核心观点待补")}</p>
+        </div>
+        <label class="workflow-focus-selector">
+          <span>切换选题</span>
+          <select data-workflow-focus-selector aria-label="切换当前选题">
+            ${state.topics.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === topic.id ? "selected" : ""}>${escapeHtml(item.title)} · ${escapeHtml(stageLabels[item.stage] || item.stage)}</option>`).join("")}
+          </select>
+        </label>
+      </div>
+      <div class="workflow-focus-metrics" aria-label="当前选题进度">
+        <div><span>稿件</span><strong>${scripts.length} 版</strong></div>
+        <div><span>必需平台</span><strong>${publishedRequired}/3</strong></div>
+        <div><span>发布记录</span><strong>${publications.length} 条</strong></div>
+        <div><span>复盘</span><strong>${reviews.length} 次</strong></div>
+      </div>
+      <div class="workflow-next-step">
+        <div>
+          <span>下一步</span>
+          <strong>${escapeHtml(guidance.title)}</strong>
+          <p>${escapeHtml(guidance.detail)}</p>
+        </div>
+        <button type="button" class="primary-button" data-action="workflow-next" data-command="${guidance.command}" data-target="${guidance.target}" data-id="${escapeHtml(topic.id)}">${escapeHtml(guidance.actionLabel)}</button>
+      </div>
+      <div class="workflow-focus-context">
+        <div><span>目标读者</span><p>${escapeHtml(topic.targetReader || "待补")}</p></div>
+        <div><span>最小可发布版本</span><p>${escapeHtml(topic.minimalPublishableVersion || "待补")}</p></div>
+      </div>
+      <details class="workflow-focus-editor">
+        <summary>调整选题信息</summary>
+        <form class="form-grid" data-edit-form="topics" data-id="${escapeHtml(topic.id)}">
+          <div class="field full"><label>标题</label><input name="title" value="${escapeHtml(topic.title || "")}" required></div>
+          <div class="field full"><label>核心观点</label><textarea name="coreIdea" required>${escapeHtml(topic.coreIdea || "")}</textarea></div>
+          <div class="field full"><label>目标读者</label><input name="targetReader" value="${escapeHtml(topic.targetReader || "")}" required></div>
+          <div class="field full"><label>最小可发布版本</label><input name="minimalPublishableVersion" value="${escapeHtml(topic.minimalPublishableVersion || "")}" required></div>
+          <div class="form-actions"><button class="primary-button" type="submit">保存选题</button></div>
+        </form>
+      </details>
+    </section>
+  `;
+}
+
 function renderWorkflowWorkspace() {
+  const topic = activeWorkflowTopic();
+  const activeGroup = topic ? workflowStageGroup(topic.stage) : "";
+  const publishedRequired = topic
+    ? requiredPublicationPlatforms.filter((platform) => workflowPublishedPlatforms(topic.id).has(platform)).length
+    : 0;
   return `
     <section class="page-head">
-      <div><h1 class="page-title">工作流</h1><p class="page-subtitle">选题 · 生产 · 发布 · 复盘</p></div>
+      <div><h1 class="page-title">工作流</h1><p class="page-subtitle">围绕当前选题完成一个闭环</p></div>
     </section>
+    ${renderWorkflowFocus()}
     ${renderWorkflowPipeline()}
-    <div class="category-stack">
-      <div class="category-section" id="workflow-topics">${renderTopics()}</div>
-      <div class="category-section" id="workflow-production">${renderProduction()}</div>
-      <div class="category-section" id="workflow-publish">${renderPublish()}</div>
-      <div class="category-section" id="workflow-review">${renderReview()}</div>
+    <div class="workflow-stage-stack">
+      <details class="workflow-stage-panel" id="workflow-production" ${activeGroup === "production" ? "open" : ""}>
+        <summary>
+          <span><strong>制作与审核</strong><small>稿件 · 七项检查 · 四个人工关卡</small></span>
+          ${tag(topic ? `${topicScripts(topic.id).length} 版稿` : "待选题", "info")}
+        </summary>
+        <div class="workflow-stage-body">${renderProduction()}</div>
+      </details>
+      <details class="workflow-stage-panel" id="workflow-publish" ${activeGroup === "publish" ? "open" : ""}>
+        <summary>
+          <span><strong>发布</strong><small>平台记录 · 缺口 · 阻塞</small></span>
+          ${tag(topic ? `${publishedRequired}/3 必需平台` : "待选题", publishedRequired === 3 ? "accent" : "info")}
+        </summary>
+        <div class="workflow-stage-body">${renderPublish()}</div>
+      </details>
+      <details class="workflow-stage-panel" id="workflow-review" ${activeGroup === "review" ? "open" : ""}>
+        <summary>
+          <span><strong>复盘</strong><small>数据 · 评论 · 下一条改法</small></span>
+          ${tag(topic ? `${topicReviews(topic.id).length} 次复盘` : "待选题", "info")}
+        </summary>
+        <div class="workflow-stage-body">${renderReview()}</div>
+      </details>
     </div>
+    <details class="workflow-archive" ${topic ? "" : "open"}>
+      <summary>
+        <span><strong>选题库与全局台账</strong><small>历史选题 · 全平台记录 · 新增选题</small></span>
+        ${tag(`选题 ${state.topics.length}`, "info")}
+      </summary>
+      <div class="workflow-archive-body">
+        <section class="workflow-archive-section" id="workflow-topics">${renderTopics()}</section>
+        <details class="workflow-archive-section">
+          <summary><strong>全局发布台账</strong><span>${state.publications.length} 条记录</span></summary>
+          ${renderPublishBoard()}
+          ${renderPublicationRecords()}
+        </details>
+      </div>
+    </details>
   `;
 }
 
@@ -682,17 +1424,19 @@ function dailyPriorityQueue() {
 }
 
 function renderWorkflowPipeline() {
+  const focusedTopic = activeWorkflowTopic();
+  const focusedGroup = focusedTopic ? workflowPipelineStageKey(focusedTopic.stage) : "";
   const groups = [
-    { label: "选题", stages: ["topic"], anchor: "workflow-topics" },
-    { label: "提纲 / 草稿", stages: ["outline", "draft"], anchor: "workflow-production" },
-    { label: "制作 / 待审", stages: ["production", "review"], anchor: "workflow-production" },
-    { label: "待发", stages: ["ready-to-publish"], anchor: "workflow-publish" },
-    { label: "发布 / 复盘", stages: ["published", "reviewed"], anchor: "workflow-review" }
+    { key: "topic", label: "选题", stages: ["topic"], anchor: "workflow-topics" },
+    { key: "outline", label: "提纲 / 草稿", stages: ["outline", "draft"], anchor: "workflow-production" },
+    { key: "production", label: "制作 / 待审", stages: ["production", "review"], anchor: "workflow-production" },
+    { key: "publish", label: "待发 / 已发", stages: ["ready-to-publish", "published"], anchor: "workflow-publish" },
+    { key: "review", label: "复盘", stages: ["reviewed"], anchor: "workflow-review" }
   ].map((group) => ({
     ...group,
     count: state.topics.filter((topic) => group.stages.includes(topic.stage)).length
   }));
-  const activeGroup = groups.find((group) => group.count > 0 && group.label !== "发布 / 复盘");
+  const activeGroup = groups.find((group) => group.count > 0);
   const total = state.topics.length;
 
   return `
@@ -700,13 +1444,13 @@ function renderWorkflowPipeline() {
       <div class="item-head">
         <div>
           <h2 class="panel-title">阶段漏斗</h2>
-          <p class="panel-note">${activeGroup ? `当前重心：${activeGroup.label} · ${activeGroup.count} 个` : total ? "当前批次已进入收尾" : "还没有选题"}</p>
+          <p class="panel-note">${focusedTopic ? `当前选题：${stageLabels[focusedTopic.stage] || focusedTopic.stage}` : activeGroup ? `当前重心：${activeGroup.label} · ${activeGroup.count} 个` : total ? "当前批次已进入收尾" : "还没有选题"}</p>
         </div>
         ${tag(`选题 ${total}`, "info")}
       </div>
       <div class="pipeline-track">
         ${groups.map((group) => `
-          <button type="button" data-action="nav" data-view="workflow" data-anchor="${group.anchor}">
+          <button type="button" class="${focusedGroup === group.key ? "is-current" : ""}" data-action="nav" data-view="workflow" data-anchor="${group.anchor}">
             <span>${group.label}</span>
             <strong>${group.count}</strong>
           </button>
@@ -747,8 +1491,14 @@ function renderToday() {
     <div class="today-layout">
       <section class="panel">
         <div class="item-head">
-          <h2 class="panel-title">今日动作</h2>
-          ${brief ? tag(displayDate(brief.generatedAt), "accent") : ""}
+          <div>
+            <h2 class="panel-title">今日动作</h2>
+            <p class="panel-note">${state.runtime?.morningPipeline ? "投递箱 · 采集 · 回流 · 晨报 · Inbox · 生产" : "晨间流水线待加载"}</p>
+          </div>
+          <div class="head-actions">
+            <button type="button" class="small-button accent" data-action="run-morning-pipeline">运行流水线</button>
+            ${brief ? tag(displayDate(brief.generatedAt), "accent") : ""}
+          </div>
         </div>
         <div class="sprint-progress">
           <div><span>作品目标</span><strong>${completedWorks}/${sprintTarget}</strong></div>
@@ -771,6 +1521,7 @@ function renderToday() {
             </li>
           `).join("")}
         </ol>
+        ${renderMorningPipelineStages()}
         <div class="today-actions">
           <button type="button" data-action="nav" data-view="flow" data-anchor="flow-inbox"><span>清 Inbox</span><strong>${inboxCount}</strong></button>
           <button type="button" data-action="nav" data-view="flow" data-anchor="flow-sources"><span>处理账号</span><strong>${manualActionCount}</strong></button>
@@ -806,6 +1557,61 @@ function renderToday() {
   `;
 }
 
+function renderCapabilityMatrix() {
+  const capability = state.runtime?.platformCapabilities;
+  if (!capability) return "";
+  return `
+    <section class="panel capability-matrix" aria-label="平台能力矩阵">
+      <div class="item-head">
+        <div>
+          <h2 class="panel-title">平台能力矩阵</h2>
+          <p class="panel-note">只声明当前安全边界内的能力；unknown 不伪装成完整支持。</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="capability-table">
+          <thead>
+            <tr>
+              <th>平台</th>
+              ${capability.dimensions.map((dimension) => `<th>${escapeHtml(dimension.label)}</th>`).join("")}
+              <th>登录与风险边界</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${capability.platforms.map((platform) => `
+              <tr>
+                <th scope="row">
+                  <div class="capability-platform">
+                    <strong>${escapeHtml(platform.label)}</strong>
+                    <small>${platform.sourceCount ? `${platform.sourceCount} 个来源` : "暂无来源"}</small>
+                  </div>
+                </th>
+                ${capability.dimensions.map((dimension) => {
+                  const item = platform.capabilities[dimension.id] || {};
+                  return `
+                    <td>
+                      <div class="capability-cell">
+                        ${tag(capabilityStatusLabels[item.status] || item.status, capabilityStatusVariants[item.status] || "")}
+                        <small>${escapeHtml(item.method || "")}</small>
+                      </div>
+                    </td>
+                  `;
+                }).join("")}
+                <td>
+                  <div class="capability-boundary">
+                    <small>${escapeHtml(platform.loginBoundary)}</small>
+                    <small>${escapeHtml(platform.riskBoundary)}</small>
+                  </div>
+                </td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function renderSources() {
   const dueCount = state.sources.filter(isDueSource).length;
   const retryingCount = state.sources.filter((source) => source.automationStatus === "retrying").length;
@@ -828,6 +1634,7 @@ function renderSources() {
       </div>
     </section>
     ${renderCommandCenter()}
+    ${renderCapabilityMatrix()}
     <div class="split">
       <div>
         <section class="panel">
@@ -911,15 +1718,19 @@ function renderSources() {
                 ${tag(methodLabels[source.collectionMethod] || source.collectionMethod || "未设置")}
                 ${tag(source.checkFrequency || "daily")}
                 ${sourceScheduleTags(source)}
+                ${source.profileFollowers ? tag(`粉丝 ${source.profileFollowers}`) : ""}
+                ${source.profileEngagement ? tag(`赞藏 ${source.profileEngagement}`) : ""}
                 ${source.authorMedianEngagement ? tag(`中位数 ${source.authorMedianEngagement} · 样本 ${source.engagementSampleCount || 0}`) : ""}
                 ${source.coverage ? tag(
                   source.coverage.totalNotes
                     ? `已入库 ${source.coverage.collectedCount || 0}/${source.coverage.totalNotes}${source.coverage.percent === null ? "" : ` · ${source.coverage.percent}%`}`
                     : `本页最近加载 ${source.coverage.lastLoadedCount || 0} 条 · 总数待确认`,
-                  source.coverage.status === "complete" ? "accent" : source.coverage.status === "partial" ? "warn" : ""
+                  source.coverage.status === "complete" ? "accent" : source.coverage.status === "partial" ? "warn" : source.coverage.status === "blocked" ? "danger" : ""
                 ) : ""}
               </div>
-              ${source.coverage ? `<p class="item-note">${escapeHtml(coverageLabels[source.coverage.status] || source.coverage.status)}；需要补历史时，在原主页继续向下滚动并重复点击采集书签。</p>` : ""}
+              ${source.coverage ? `<p class="item-note">${escapeHtml(source.coverage.status === "blocked"
+                ? `${coverageLabels.blocked}；已保留 ${source.coverage.lastLoadedCount || 0} 条可见快照，其中 ${source.coverage.blockedNoteCount || 0} 条暂不进入 Inbox。请从 App 分享目标笔记链接后用详情书签补证据。`
+                : `${coverageLabels[source.coverage.status] || source.coverage.status}；需要补历史时，在原主页继续向下滚动并重复点击采集书签。`)}</p>` : ""}
               ${source.lastCollectionError ? `<p class="item-note danger-text">${escapeHtml(source.lastCollectionError)}</p>` : ""}
               ${source.keepReason ? `<p class="item-note">${escapeHtml(source.keepReason)}</p>` : ""}
               <div class="item-actions">
@@ -937,6 +1748,27 @@ function renderSources() {
   `;
 }
 
+function canTranscribeSignalMedia(mediaItems) {
+  return (Array.isArray(mediaItems) ? mediaItems : []).some((item) => {
+    if (item?.type !== "video" || !/\.mp4(?:[?#]|$)/i.test(String(item.url || ""))) return false;
+    try {
+      const host = new URL(item.url).hostname.toLowerCase();
+      return host === "xhscdn.com" || host.endsWith(".xhscdn.com")
+        || host === "xhscdn.net" || host.endsWith(".xhscdn.net")
+        || host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com");
+    } catch {
+      return false;
+    }
+  });
+}
+
+function transcriptSegmentTime(seconds) {
+  const totalSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+  const minutes = Math.floor(totalSeconds / 60);
+  const rest = totalSeconds % 60;
+  return `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
 function renderInbox() {
   const funnel = state.runtime?.inbox;
   const evidenceBySignal = new Map((state.evidencePackages || []).map((item) => [item.signalId, item]));
@@ -945,12 +1777,13 @@ function renderInbox() {
     if (inboxFilter === "unseen") return !signal.seen;
     return signal.disposition === inboxFilter;
   });
-  const filters = [["inbox", "待处理"], ["unseen", "未看"], ["watch", "观察"], ["dissect", "拆解"], ["discard", "丢弃"]];
+  const filters = [["inbox", "待处理"], ["unseen", "未看"], ["watch", "观察"], ["dissect", "拆解"], ["produce", "生产"], ["discard", "丢弃"]];
   const filterCounts = {
     inbox: funnel?.pending ?? 0,
     unseen: funnel?.unseenCount ?? state.signals.filter((signal) => !signal.seen).length,
     watch: funnel?.counts?.watch ?? 0,
     dissect: funnel?.counts?.dissect ?? 0,
+    produce: funnel?.counts?.produce ?? 0,
     discard: funnel?.counts?.discard ?? 0
   };
   const visibleSignals = [...filtered].sort((a, b) => (
@@ -1003,9 +1836,17 @@ function renderInbox() {
         const multiple = signal.relativeMultiple;
         const contentText = String(signal.contentText || "").trim();
         const imageDescriptions = Array.isArray(signal.imageDescriptions) ? signal.imageDescriptions : [];
+        const mediaItems = Array.isArray(signal.mediaItems) ? signal.mediaItems : [];
         const dataPoints = Array.isArray(signal.dataPointCandidates) ? signal.dataPointCandidates : [];
         const evidence = evidenceBySignal.get(signal.id) || null;
         const evidenceVerification = evidence?.verification?.state || "unverified";
+        const transcriptText = String(signal.transcriptText || "").trim();
+        const transcriptSegments = Array.isArray(signal.transcriptSegments) ? signal.transcriptSegments : [];
+        const canTranscribe = canTranscribeSignalMedia(mediaItems);
+        const transcriptStatus = signal.transcriptStatus
+          ? (transcriptStatusLabels[signal.transcriptStatus] || signal.transcriptStatus)
+          : "待补详情";
+        const canCaptureDetail = signal.platform === "xiaohongshu" && source?.collectionMethod === "browser-assisted";
         return `
           <article class="item-card" data-signal-card="${escapeHtml(signal.id)}">
             <div class="item-head">
@@ -1025,6 +1866,9 @@ function renderInbox() {
               ${multiple !== null && multiple !== undefined ? tag(`${multiple}x`, "accent") : ""}
               ${source ? tag(`样本 ${source.engagementSampleCount || 0}`) : ""}
               ${contentText ? tag(`正文 ${contentText.length} 字`) : ""}
+              ${signal.coverUrl ? tag("封面已采", "accent") : ""}
+              ${mediaItems.length ? tag(`媒体 ${mediaItems.length}`) : ""}
+              ${signal.transcriptStatus ? tag(`逐字稿 ${transcriptText ? transcriptText.length + " 字" : transcriptStatus}`, signal.transcriptStatus === "captured" ? "accent" : signal.transcriptStatus === "blocked" ? "danger" : "warn") : ""}
               ${imageDescriptions.length ? tag(`图片描述 ${imageDescriptions.length}`) : ""}
               ${dataPoints.length ? tag(`数据口径 ${dataPoints.length}`, "warn") : ""}
               ${evidence
@@ -1056,6 +1900,51 @@ function renderInbox() {
                 ` : ""}
               </details>
             ` : ""}
+            ${(canCaptureDetail || contentText || mediaItems.length || signal.coverUrl || signal.transcriptStatus) ? `
+              <details class="details detail-evidence">
+                <summary>详情证据</summary>
+                <div class="detail-evidence-grid">
+                  <div>
+                    <p class="extract-label">采集时间</p>
+                    <p class="extract-text">${escapeHtml(signal.detailCapturedAt ? displayDate(signal.detailCapturedAt) : "尚未采集")}</p>
+                  </div>
+                  <div>
+                    <p class="extract-label">封面</p>
+                    ${signal.coverUrl ? `<a class="link" href="${escapeHtml(signal.coverUrl)}" target="_blank" rel="noreferrer">打开封面</a>` : `<p class="extract-text">缺失</p>`}
+                  </div>
+                  <div>
+                    <p class="extract-label">逐字稿</p>
+                    <p class="extract-text">${escapeHtml(signal.transcriptStatus ? transcriptStatus : "待补详情")}</p>
+                    <p class="extract-text">${escapeHtml(signal.transcriptSource || "未运行本地 ASR")}</p>
+                    ${signal.transcriptNote ? `<p class="panel-note">${escapeHtml(signal.transcriptNote)}</p>` : ""}
+                  </div>
+                  <div>
+                    <p class="extract-label">时间轴</p>
+                    <p class="extract-text">${transcriptSegments.length ? `${transcriptSegments.length} 段 / ${transcriptSegmentTime(signal.transcriptDurationSeconds)}` : "未生成"}</p>
+                  </div>
+                </div>
+                ${mediaItems.length ? `
+                  <div class="extract-block">
+                    <p class="extract-label">媒体清单</p>
+                    <ul class="extract-list">${mediaItems.map((item) => `<li><a class="link" href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.type === "video" ? "视频" : item.type === "image" ? "图片" : "媒体")}</a>${item.description ? "：" + escapeHtml(item.description) : ""}</li>`).join("")}</ul>
+                  </div>
+                ` : ""}
+                ${transcriptText ? `
+                  <div class="extract-block">
+                    <p class="extract-label">逐字稿全文</p>
+                    <p class="extract-text">${escapeHtml(transcriptText)}</p>
+                  </div>
+                ` : ""}
+                ${transcriptSegments.length ? `
+                  <details class="details">
+                    <summary>逐字稿时间轴</summary>
+                    <ul class="extract-list">
+                      ${transcriptSegments.map((segment) => `<li>${escapeHtml(transcriptSegmentTime(segment.start))} - ${escapeHtml(transcriptSegmentTime(segment.end))}：${escapeHtml(segment.text || "")}</li>`).join("")}
+                    </ul>
+                  </details>
+                ` : ""}
+              </details>
+            ` : ""}
             <details class="details">
               <summary>编辑信号</summary>
               <form class="form-grid" data-edit-form="signals" data-id="${escapeHtml(signal.id)}">
@@ -1082,6 +1971,9 @@ function renderInbox() {
               <button type="button" class="danger-button" data-action="disposition" data-id="${escapeHtml(signal.id)}" data-value="discard">丢弃</button>
             </div>
             <div class="item-actions evidence-actions">
+              ${canCaptureDetail ? `<a class="small-button accent" draggable="true" href="${escapeHtml(xhsDetailBookmarkletHref(signal))}" title="打开这条笔记详情页后点击">补详情书签</a>` : ""}
+              ${canCaptureDetail ? `<button type="button" class="small-button" data-action="copy-xhs-detail" data-id="${escapeHtml(signal.id)}">复制详情脚本</button>` : ""}
+              ${canTranscribe ? `<button type="button" class="small-button ${transcriptText ? "" : "accent"}" data-action="transcribe-signal" data-id="${escapeHtml(signal.id)}">${transcriptText ? "重新转写" : "生成逐字稿"}</button>` : ""}
               <button type="button" class="small-button ${evidence ? "" : "accent"}" data-action="create-evidence-package" data-id="${escapeHtml(signal.id)}">${evidence ? "重建证据包" : "生成证据包"}</button>
               ${evidence ? `<button type="button" class="small-button" data-action="copy-evidence-path" data-id="${escapeHtml(evidence.id)}">复制证据目录</button>` : ""}
             </div>
@@ -1206,13 +2098,14 @@ function renderMaterials() {
 }
 
 function renderTopics() {
+  const focusedTopic = activeWorkflowTopic();
   return `
     <section class="section-head">
-      <div><h2 class="section-title">选题池</h2><p class="section-subtitle">目标读者 · 核心观点 · 最小版本</p></div>
+      <div><h2 class="section-title">选题库</h2><p class="section-subtitle">切换焦点 · 补充新选题 · 保留历史阶段</p></div>
     </section>
     <div class="split">
       <section class="panel">
-        <h2 class="panel-title">添加选题</h2>
+        <h2 class="panel-title">新增选题</h2>
         <form id="topic-form" class="form-grid">
           <div class="field full"><label>标题</label><input name="title" required></div>
           <div class="field full"><label>核心观点</label><textarea name="coreIdea" required></textarea></div>
@@ -1222,27 +2115,26 @@ function renderTopics() {
         </form>
       </section>
       <section class="panel">
-        <h2 class="panel-title">选题列表</h2>
+        <h2 class="panel-title">全部选题</h2>
         <div class="list">
           ${state.topics.length ? state.topics.map((topic) => `
-            <article class="item-card">
+            <article class="item-card topic-library-card ${topic.id === focusedTopic?.id ? "is-focused" : ""}">
               <div class="item-head">
                 <h3 class="item-title">${escapeHtml(topic.title)}</h3>
                 ${tag(stageLabels[topic.stage] || topic.stage, topic.stage === "ready-to-publish" ? "warn" : "accent")}
               </div>
               <p class="item-body">${escapeHtml(topic.coreIdea || "")}</p>
-              <div class="item-meta">${tag(topic.targetReader || "读者待补")}${tag(topic.minimalPublishableVersion || "最小版本待补")}</div>
-              <details class="details">
-                <summary>编辑选题</summary>
-                <form class="form-grid" data-edit-form="topics" data-id="${escapeHtml(topic.id)}">
-                  <div class="field full"><label>标题</label><input name="title" value="${escapeHtml(topic.title || "")}" required></div>
-                  <div class="field full"><label>核心观点</label><textarea name="coreIdea" required>${escapeHtml(topic.coreIdea || "")}</textarea></div>
-                  <div class="field full"><label>目标读者</label><input name="targetReader" value="${escapeHtml(topic.targetReader || "")}" required></div>
-                  <div class="field full"><label>最小可发布版本</label><input name="minimalPublishableVersion" value="${escapeHtml(topic.minimalPublishableVersion || "")}" required></div>
-                  <div class="form-actions"><button class="primary-button" type="submit">保存选题</button></div>
-                </form>
-              </details>
-              <div class="item-actions"><button type="button" class="small-button accent" data-action="advance-topic" data-id="${escapeHtml(topic.id)}">下一阶段</button></div>
+              <div class="item-meta">
+                ${tag(`稿件 ${topicScripts(topic.id).length}`)}
+                ${tag(`复盘 ${topicReviews(topic.id).length}`)}
+                ${topic.id === focusedTopic?.id ? tag("当前焦点", "info") : ""}
+              </div>
+              <div class="item-actions">
+                ${topic.id === focusedTopic?.id
+                  ? ""
+                  : `<button type="button" class="small-button accent" data-action="workflow-focus" data-id="${escapeHtml(topic.id)}">设为当前</button>`}
+                <button type="button" class="small-button" data-action="advance-topic" data-id="${escapeHtml(topic.id)}">下一阶段</button>
+              </div>
             </article>
           `).join("") : `<div class="empty">暂无选题</div>`}
         </div>
@@ -1261,63 +2153,111 @@ function renderChecks(topic, kind, labels) {
   `).join("");
 }
 
-function renderProduction() {
-  const topics = state.topics.filter((topic) => !["published", "reviewed"].includes(topic.stage));
+function renderScriptVersionList(topicId, limit = 3) {
+  const scripts = state.scripts
+    .filter((script) => script.topicId === topicId)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+    .slice(0, limit);
   return `
-    <section class="section-head"><div><h2 class="section-title">生产台</h2><p class="section-subtitle">七项检查 · 四个人工关卡</p></div></section>
-    <div class="split">
-      <div>
-        <section class="panel">
-          <h2 class="panel-title">稿子版本</h2>
-          <form id="script-form" class="form-grid">
-            <div class="field full"><label>选题</label><select name="topicId">${topicOptions()}</select></div>
-            <div class="field"><label>工具</label><select name="tool"><option>Gemini</option><option>Claude Opus</option><option>人工</option><option>其他</option></select></div>
-            <div class="field"><label>版本说明</label><input name="versionNote" required></div>
-            <div class="field full"><label>输入摘要</label><textarea name="inputSummary"></textarea></div>
-            <div class="field full"><label>稿子</label><textarea name="text" required></textarea></div>
-            <div class="form-actions"><button class="primary-button" type="submit">保存版本</button></div>
-          </form>
-        </section>
-      </div>
-      <div>
-        <section class="panel">
-          <h2 class="panel-title">生产检查</h2>
-          <div class="list">
-            ${topics.length ? topics.map((topic) => `
-              <article class="item-card" data-production-card="${escapeHtml(topic.id)}">
-                <div class="item-head"><h3 class="item-title">${escapeHtml(topic.title)}</h3>${tag(stageLabels[topic.stage] || topic.stage, "accent")}</div>
-                <div class="check-grid">${renderChecks(topic, "productionChecks", productionCheckLabels)}</div>
-                <div class="check-grid">${renderChecks(topic, "gates", gateLabels)}</div>
-                <div class="item-actions"><button type="button" class="small-button accent" data-action="advance-topic" data-id="${escapeHtml(topic.id)}">下一阶段</button></div>
-                <details class="details">
-                  <summary>稿子版本</summary>
-                  <div class="list">
-                    ${state.scripts.filter((script) => script.topicId === topic.id).slice(0, 3).map((script) => `
-                      <article class="item-card">
-                        <div class="item-head"><h3 class="item-title">${escapeHtml(script.versionNote)}</h3>${tag(script.tool || "未记工具", "info")}</div>
-                        <p class="item-note">${displayDate(script.createdAt)}</p>
-                      </article>
-                    `).join("") || `<div class="empty">暂无稿子</div>`}
-                  </div>
-                </details>
-              </article>
-            `).join("") : `<div class="empty">暂无生产中选题</div>`}
+    <div class="script-version-list">
+      ${scripts.map((script, index) => {
+        const previousScript = scripts[index + 1];
+        return `
+          <article class="script-version">
+            <div class="item-head"><h3 class="item-title">${escapeHtml(script.versionNote)}</h3>${tag(script.tool || "未记工具", "info")}</div>
+            <p class="item-note">${displayDate(script.createdAt)} · ${escapeHtml(scriptChangeSummary(script, previousScript))}</p>
+            <div class="script-text">${escapeHtml(normalizeScriptText(script.text) || "正文为空")}</div>
+          </article>
+        `;
+      }).join("") || `<div class="empty">暂无稿子</div>`}
+    </div>
+  `;
+}
+
+function renderProduction() {
+  const topic = activeWorkflowTopic();
+  if (!topic) {
+    return `
+      <section class="workflow-empty">
+        <div><strong>还没有可制作的选题</strong><p>先建立选题，再开始写稿和过制作关卡。</p></div>
+        <button type="button" class="primary-button" data-action="workflow-next" data-command="open" data-target="workflow-topics">打开选题库</button>
+      </section>
+    `;
+  }
+  const missingChecks = Object.keys(productionCheckLabels).filter((key) => topic.productionChecks?.[key] !== true).length;
+  const missingGates = Object.keys(gateLabels).filter((key) => topic.gates?.[key] !== true).length;
+  return `
+    <section class="section-head">
+      <div><h2 class="section-title">制作当前选题</h2><p class="section-subtitle">写版本 · 收证据 · 过人工关卡</p></div>
+      <div class="head-actions">${tag(`检查缺 ${missingChecks}`, missingChecks ? "warn" : "accent")}${tag(`关卡缺 ${missingGates}`, missingGates ? "warn" : "accent")}</div>
+    </section>
+    <div class="split workflow-production-grid">
+      <section class="panel">
+        <div class="item-head">
+          <div><h2 class="panel-title">新增稿子版本</h2><p class="panel-note">${escapeHtml(topic.title)}</p></div>
+          ${tag(`已有 ${topicScripts(topic.id).length} 版`, "info")}
+        </div>
+        <form id="script-form" class="form-grid">
+          <input type="hidden" name="topicId" value="${escapeHtml(topic.id)}">
+          <div class="field"><label>工具</label><select name="tool"><option>Gemini</option><option>Claude Opus</option><option>人工</option><option>其他</option></select></div>
+          <div class="field"><label>版本说明</label><input name="versionNote" required></div>
+          <div class="field full"><label>输入摘要</label><textarea name="inputSummary"></textarea></div>
+          <div class="field full"><label>稿子</label><textarea name="text" required></textarea></div>
+          <div class="form-actions"><button class="primary-button" type="submit">保存版本</button></div>
+        </form>
+      </section>
+      <section class="panel">
+        <article class="workflow-check-card" data-production-card="${escapeHtml(topic.id)}">
+          <div class="item-head">
+            <div><h2 class="panel-title">制作门槛</h2><p class="panel-note">${escapeHtml(topic.title)}</p></div>
+            ${tag(stageLabels[topic.stage] || topic.stage, "accent")}
           </div>
-        </section>
-      </div>
+          <div class="check-section">
+            <h3>七项生产检查</h3>
+            <div class="check-grid">${renderChecks(topic, "productionChecks", productionCheckLabels)}</div>
+          </div>
+          <div class="check-section">
+            <h3>四个人工关卡</h3>
+            <div class="check-grid">${renderChecks(topic, "gates", gateLabels)}</div>
+          </div>
+          <div class="item-actions">
+            <button type="button" class="small-button accent" data-action="advance-topic" data-id="${escapeHtml(topic.id)}">推进阶段</button>
+          </div>
+        </article>
+        <details class="details script-versions" open>
+          <summary>稿件回看 · ${topicScripts(topic.id).length} 版</summary>
+          ${renderScriptVersionList(topic.id)}
+        </details>
+      </section>
     </div>
   `;
 }
 
 function renderPublish() {
+  const topic = activeWorkflowTopic();
+  if (!topic) {
+    return `
+      <section class="workflow-empty">
+        <div><strong>还没有可发布的选题</strong><p>建立并完成制作后，再记录各平台状态。</p></div>
+        <button type="button" class="primary-button" data-action="workflow-next" data-command="open" data-target="workflow-topics">打开选题库</button>
+      </section>
+    `;
+  }
+  const records = topicPublications(topic.id);
+  const publishedPlatforms = workflowPublishedPlatforms(topic.id);
+  const readyCount = requiredPublicationPlatforms.filter((platform) => publishedPlatforms.has(platform)).length;
   return `
-    <section class="section-head"><div><h2 class="section-title">发布台账</h2><p class="section-subtitle">平台逐列追踪</p></div></section>
-    ${renderPublishBoard()}
-    <div class="split">
+    <section class="section-head">
+      <div><h2 class="section-title">发布当前选题</h2><p class="section-subtitle">三个必需平台全部记录后进入已发布</p></div>
+      <div class="head-actions">${tag(`必需平台 ${readyCount}/3`, readyCount === 3 ? "accent" : "warn")}${tag(`记录 ${records.length}`, "info")}</div>
+    </section>
+    <div class="split workflow-publish-grid">
       <section class="panel">
-        <h2 class="panel-title">添加发布记录</h2>
+        <div class="item-head">
+          <div><h2 class="panel-title">补一条平台记录</h2><p class="panel-note">${escapeHtml(topic.title)}</p></div>
+        </div>
         <form id="publication-form" class="form-grid">
-          <div class="field full"><label>选题</label><select name="topicId">${topicOptions()}</select></div>
+          <input type="hidden" name="topicId" value="${escapeHtml(topic.id)}">
           <div class="field"><label>平台</label><select name="platform"><option value="douyin">抖音</option><option value="xiaohongshu">小红书</option><option value="wechat">公众号</option><option value="x">X</option></select></div>
           <div class="field"><label>状态</label><select name="status"><option value="not-ready">未准备</option><option value="manual">待人工</option><option value="published">已发</option><option value="failed">失败</option><option value="skipped">跳过</option></select></div>
           <div class="field"><label>发布时间</label><input name="publishedAt" type="datetime-local"></div>
@@ -1328,23 +2268,22 @@ function renderPublish() {
         </form>
       </section>
       <section class="panel">
-        <h2 class="panel-title">平台状态</h2>
-        <div class="list">
-          ${state.publications.length ? [...state.publications].sort(comparePublications).map((item) => {
-            const topic = topicById(item.topicId);
-            return `
-              <article class="item-card">
-                <div class="item-head"><h3 class="item-title">${escapeHtml(topic?.title || "未关联选题")}</h3>${tag(platformLabels[item.platform] || item.platform, "info")}</div>
-                <div class="item-meta">${tag(publicationStatusLabels[item.status || "not-ready"] || item.status, publicationStatusVariants[item.status || "not-ready"] || "")}${tag(displayDate(item.publishedAt))}</div>
-                ${item.failureReason ? `<p class="item-note">${escapeHtml(item.failureReason)}</p>` : ""}
-                ${item.nextAction ? `<p class="item-note">下一步：${escapeHtml(item.nextAction)}</p>` : ""}
-              </article>
-            `;
-          }).join("") : `<div class="empty">暂无发布记录</div>`}
+        <div class="item-head">
+          <div><h2 class="panel-title">当前平台状态</h2><p class="panel-note">先处理阻塞，再看缺口</p></div>
+        </div>
+        ${renderTopicPublishBoard(topic)}
+        <div class="workflow-subsection">
+          <h3>当前选题记录</h3>
+          ${renderPublicationRecordList(topic.id)}
         </div>
       </section>
     </div>
   `;
+}
+
+function renderTopicPublishBoard(topic) {
+  const records = state.publications.filter((item) => item.topicId === topic.id);
+  return `<div class="publish-board-inline">${renderPublishRows(records)}</div>`;
 }
 
 function comparePublications(a, b) {
@@ -1353,14 +2292,14 @@ function comparePublications(a, b) {
     || new Date(b.publishedAt || 0).getTime() - new Date(a.publishedAt || 0).getTime();
 }
 
-function renderPublishBoard() {
-  const rows = publicationPlatforms.map((platform) => {
-    const records = state.publications.filter((item) => item.platform === platform);
-    const published = records.filter((item) => item.status === "published").length;
-    const blocked = records.filter((item) => ["manual", "failed"].includes(item.status)).length;
-    const percent = records.length ? Math.round((published / records.length) * 100) : 0;
+function renderPublishRows(records) {
+  return publicationPlatforms.map((platform) => {
+    const platformRecords = records.filter((item) => item.platform === platform);
+    const published = platformRecords.filter((item) => item.status === "published").length;
+    const blocked = platformRecords.filter((item) => ["manual", "failed"].includes(item.status)).length;
+    const percent = platformRecords.length ? Math.round((published / platformRecords.length) * 100) : 0;
     const statusTags = publicationStatusOrder
-      .map((status) => ({ status, count: records.filter((item) => (item.status || "not-ready") === status).length }))
+      .map((status) => ({ status, count: platformRecords.filter((item) => (item.status || "not-ready") === status).length }))
       .filter((entry) => entry.count > 0)
       .map((entry) => tag(`${publicationStatusLabels[entry.status]} ${entry.count}`, publicationStatusVariants[entry.status] || ""))
       .join("");
@@ -1369,36 +2308,114 @@ function renderPublishBoard() {
       <div class="publish-row">
         <div class="publish-platform">
           <strong>${platformLabels[platform]}</strong>
-          <small>${records.length ? `记录 ${records.length}` : "未建记录"}</small>
+          <small>${platformRecords.length ? `记录 ${platformRecords.length}` : "未建记录"}</small>
         </div>
         <div class="publish-status">${statusTags || tag("未建记录")}</div>
         <div class="publish-progress">
           <div class="progress-track" role="img" aria-label="${platformLabels[platform]}发布完成度 ${percent}%"><span style="width:${percent}%"></span></div>
-          <small>${records.length ? `${percent}%` : "--"}</small>
+          <small>${platformRecords.length ? `${percent}%` : "--"}</small>
         </div>
         ${blocked ? tag(`阻塞 ${blocked}`, "danger") : ""}
       </div>
     `;
   }).join("");
+}
 
+function renderPublishBoard() {
   return `
     <section class="panel publish-board" aria-label="平台队列">
       <div class="item-head">
         <div><h2 class="panel-title">平台队列</h2><p class="panel-note">先看阻塞，再看各平台缺口</p></div>
       </div>
-      ${rows}
+      ${renderPublishRows(state.publications)}
+    </section>
+  `;
+}
+
+function renderPublicationRecordList(topicId = null) {
+  const records = [...state.publications]
+    .filter((item) => !topicId || item.topicId === topicId)
+    .sort(comparePublications);
+  return `
+    <div class="list publication-record-list">
+      ${records.length ? records.map((item) => {
+        const topic = topicById(item.topicId);
+        const rehearsal = String(item.url || "").startsWith("workbench://local-rehearsal/");
+        return `
+          <article class="item-card">
+            <div class="item-head">
+              <h3 class="item-title">${topicId ? escapeHtml(platformLabels[item.platform] || item.platform) : escapeHtml(topic?.title || "未关联选题")}</h3>
+              <div class="item-meta">
+                ${tag(platformLabels[item.platform] || item.platform, "info")}
+                ${tag(publicationStatusLabels[item.status || "not-ready"] || item.status, publicationStatusVariants[item.status || "not-ready"] || "")}
+                ${rehearsal ? tag("本地演练", "warn") : ""}
+              </div>
+            </div>
+            <div class="item-meta">${tag(displayDate(item.publishedAt))}</div>
+            ${item.failureReason ? `<p class="item-note">${escapeHtml(item.failureReason)}</p>` : ""}
+            ${item.nextAction ? `<p class="item-note">下一步：${escapeHtml(item.nextAction)}</p>` : ""}
+          </article>
+        `;
+      }).join("") : `<div class="empty">暂无发布记录</div>`}
+    </div>
+  `;
+}
+
+function renderPublicationRecords() {
+  return `
+    <section class="panel publication-archive" aria-label="全部发布记录">
+      <div class="item-head">
+        <div><h2 class="panel-title">全部发布记录</h2><p class="panel-note">按状态和发布时间排序</p></div>
+        ${tag(`记录 ${state.publications.length}`, "info")}
+      </div>
+      ${renderPublicationRecordList()}
     </section>
   `;
 }
 
 function renderReview() {
+  const topic = activeWorkflowTopic();
+  const reviewedTopics = state.topics.filter((topic) => topic.stage === "reviewed");
+  const reviews = topic ? topicReviews(topic.id) : [];
   return `
-    <section class="section-head"><div><h2 class="section-title">复盘</h2><p class="section-subtitle">数据 · 评论 · 下一条改法</p></div></section>
-    <div class="split">
+    <section class="section-head">
+      <div><h2 class="section-title">复盘当前选题</h2><p class="section-subtitle">数据 · 评论 · 下一条改法</p></div>
+      ${topic ? tag(`复盘 ${reviews.length}`, reviews.length ? "accent" : "info") : ""}
+    </section>
+    <section class="panel reviewed-script-panel">
+      <div class="item-head">
+        <div><h2 class="panel-title">稿件回看</h2><p class="panel-note">正文和历史版本与复盘结论放在同一处</p></div>
+        ${tag(`已复盘 ${reviewedTopics.length}`)}
+      </div>
+      <div class="list">
+        ${topic && topic.stage === "reviewed" ? `
+            <article class="item-card reviewed-script-topic" data-reviewed-script-topic="${escapeHtml(topic.id)}">
+              <div class="item-head">
+                <div>
+                  <h3 class="item-title">${escapeHtml(topic.title)}</h3>
+                  <p class="item-note">${escapeHtml(topic.coreIdea || "核心观点待补")}</p>
+                </div>
+                ${tag(stageLabels[topic.stage] || topic.stage, "accent")}
+              </div>
+              <div class="item-meta">
+                ${tag(`稿件 ${topicScripts(topic.id).length} 版`)}
+                ${tag(topic.targetReader || "读者待补")}
+              </div>
+              <details class="details reviewed-script-details" id="workflow-reviewed-scripts">
+                <summary>展开正文与历史版本</summary>
+                ${renderScriptVersionList(topic.id)}
+              </details>
+            </article>
+          ` : `<div class="empty">${topic ? "当前选题完成复盘后，正文会保留在这里" : "暂无已复盘选题"}</div>`}
+      </div>
+    </section>
+    <div class="split workflow-review-grid">
       <section class="panel">
-        <h2 class="panel-title">添加复盘</h2>
+        <div class="item-head">
+          <div><h2 class="panel-title">记录本轮结果</h2><p class="panel-note">${escapeHtml(topic?.title || "先选择选题")}</p></div>
+        </div>
         <form id="review-form" class="form-grid">
-          <div class="field full"><label>选题</label><select name="topicId">${topicOptions()}</select></div>
+          <input type="hidden" name="topicId" value="${escapeHtml(topic?.id || "")}">
           <div class="field"><label>触达</label><input name="reach" type="number" min="0"></div>
           <div class="field"><label>互动</label><input name="engagement" type="number" min="0"></div>
           <div class="field full"><label>当时假设</label><textarea name="hypothesis" required></textarea></div>
@@ -1407,11 +2424,13 @@ function renderReview() {
           <div class="field full"><label>砍掉</label><textarea name="cut"></textarea></div>
           <div class="field full"><label>下一条改法</label><select name="nextMove"><option value="replicate">完全复刻</option><option value="borrow">借结构</option><option value="stop">停止</option></select></div>
           <div class="field full"><label>核心评论</label><textarea name="comments"></textarea></div>
-          <div class="form-actions"><button class="primary-button" type="submit">保存复盘</button></div>
+          <div class="form-actions"><button class="primary-button" type="submit" ${topic ? "" : "disabled"}>保存复盘</button></div>
         </form>
       </section>
       <section class="panel">
-        <h2 class="panel-title">摩擦记录</h2>
+        <div class="item-head">
+          <div><h2 class="panel-title">摩擦记录</h2><p class="panel-note">记录重复卡点和耗时</p></div>
+        </div>
         <form id="friction-form" class="form-grid">
           <div class="field full"><label>卡点</label><input name="stuckAt" required></div>
           <div class="field"><label>耗时</label><input name="minutes" type="number" min="0"></div>
@@ -1422,19 +2441,19 @@ function renderReview() {
       </section>
       ${renderFrictionSummary()}
       <section class="panel">
-        <h2 class="panel-title">复盘记录</h2>
+        <div class="item-head">
+          <div><h2 class="panel-title">当前选题复盘</h2><p class="panel-note">${escapeHtml(topic?.title || "先选择选题")}</p></div>
+          ${tag(`记录 ${reviews.length}`, "info")}
+        </div>
         <div class="list">
-          ${state.reviews.length ? state.reviews.map((review) => {
-            const topic = topicById(review.topicId);
-            return `
+          ${reviews.length ? reviews.map((review) => `
               <article class="item-card">
-                <div class="item-head"><h3 class="item-title">${escapeHtml(topic?.title || "未关联选题")}</h3>${tag(review.nextMove || "未记改法", "accent")}</div>
+                <div class="item-head"><h3 class="item-title">${escapeHtml(displayDate(review.createdAt))}</h3>${tag(review.nextMove || "未记改法", "accent")}</div>
                 <div class="item-meta">${tag(`触达 ${review.reach || 0}`)}${tag(`互动 ${review.engagement || 0}`)}${tag(review.hypothesisMet || "unclear", "info")}</div>
                 ${review.keep ? `<p class="item-note">保留：${escapeHtml(review.keep)}</p>` : ""}
                 ${review.cut ? `<p class="item-note">砍掉：${escapeHtml(review.cut)}</p>` : ""}
               </article>
-            `;
-          }).join("") : `<div class="empty">暂无复盘</div>`}
+            `).join("") : `<div class="empty">当前选题暂无复盘</div>`}
         </div>
       </section>
     </div>
@@ -1729,13 +2748,19 @@ async function signalToTopic(signalId, directProduction = false) {
     minimalPublishableVersion: "一条 60-120 秒口播",
     stage: "topic"
   }));
+  const createdTopic = state.topics.find((topic) => (
+    topic.title === title && (topic.sourceSignalIds || []).includes(signalId)
+  ));
+  if (createdTopic) setWorkflowFocusTopic(createdTopic.id);
   if (directProduction) {
-    const createdTopic = state.topics.find((topic) => (
-      topic.title === title && (topic.sourceSignalIds || []).includes(signalId)
-    ));
     if (createdTopic) await updateRecord("topics", createdTopic.id, { stage: "outline" });
   }
   await updateRecord("signals", signalId, { disposition: directProduction ? "produce" : "topic", seen: true });
+  if (directProduction) {
+    await activateView("workflow");
+    window.history.pushState(null, "", "#workflow");
+    document.getElementById("workflow-production")?.scrollIntoView({ behavior: preferredScrollBehavior() });
+  }
 }
 
 async function advanceTopic(topicId) {
@@ -1745,6 +2770,10 @@ async function advanceTopic(topicId) {
   if (currentIndex < 0 || currentIndex >= stageOrder.length - 1) return;
   if (topic.stage === "production" && Object.values(gateLabels).some((_, index) => !topic.gates?.[Object.keys(gateLabels)[index]])) {
     alert("四个人工关卡未全部通过。");
+    return;
+  }
+  if (topic.stage === "review" && Object.keys(productionCheckLabels).some((key) => topic.productionChecks?.[key] !== true)) {
+    alert("七项生产检查未全部通过。");
     return;
   }
   const nextStage = stageOrder[currentIndex + 1];
@@ -1763,9 +2792,19 @@ document.addEventListener("click", async (event) => {
       const sameView = currentView === targetView;
       await activateView(targetView);
       window.history[sameView ? "replaceState" : "pushState"](null, "", `#${currentView}`);
-      if (button.dataset.anchor) document.getElementById(button.dataset.anchor)?.scrollIntoView({ behavior: "smooth" });
+      if (button.dataset.anchor) openWorkflowPanel(button.dataset.anchor);
     } else if (action === "set-theme") {
       setTheme(button.dataset.themeValue);
+    } else if (action === "workflow-focus") {
+      setWorkflowFocusTopic(recordId);
+      render();
+      const topic = topicById(recordId);
+      openWorkflowPanel(`workflow-${workflowStageGroup(topic?.stage)}`);
+    } else if (action === "workflow-next") {
+      if (button.dataset.command === "advance" && recordId) {
+        await advanceTopic(recordId);
+      }
+      openWorkflowPanel(button.dataset.target);
     } else if (action === "refresh") {
       await loadState();
     } else if (action === "filter-inbox") {
@@ -1786,9 +2825,31 @@ document.addEventListener("click", async (event) => {
       setTimeout(() => {
         button.textContent = "复制脚本";
       }, 1600);
+    } else if (action === "copy-xhs-detail") {
+      const signal = state.signals.find((item) => item.id === recordId);
+      if (!signal) throw new Error("信号不存在，请刷新后重试。");
+      await navigator.clipboard.writeText(xhsDetailBookmarkletHref(signal));
+      button.textContent = "已复制";
+      setTimeout(() => {
+        button.textContent = "复制详情脚本";
+      }, 1600);
     } else if (action === "run-all") {
       await api("/api/automation/tick", "POST", { force: true });
       await loadState();
+    } else if (action === "run-morning-pipeline") {
+      button.disabled = true;
+      button.textContent = "运行中";
+      try {
+        const result = await api("/api/morning-pipeline/run", "POST", {});
+        await loadState();
+        const collection = result.collection?.skipped
+          ? "采集已跳过"
+          : `新增 ${result.collection?.envelope?.created || 0} · 重复 ${result.collection?.envelope?.duplicates || 0}`;
+        alert(`晨间流水线完成：投递箱新增 ${result.dropFolder?.created || 0}；${collection}；Agent 待导入 ${result.agentResults?.readyCount || 0}。`);
+      } finally {
+        button.disabled = false;
+        button.textContent = "运行流水线";
+      }
     } else if (action === "scan-drop-folder") {
       await api("/api/drop-folder/scan", "POST", {});
       await loadState();
@@ -1850,6 +2911,25 @@ document.addEventListener("click", async (event) => {
       setTimeout(() => {
         button.textContent = "复制证据目录";
       }, 1600);
+    } else if (action === "transcribe-signal") {
+      const signal = state.signals.find((item) => item.id === recordId);
+      if (!signal) throw new Error("信号不存在，请刷新后重试。");
+      const originalText = button.textContent;
+      button.disabled = true;
+      button.textContent = "转写中";
+      try {
+        const result = await api("/api/signals/transcript", "POST", {
+          signalId: recordId,
+          force: signal.transcriptStatus === "captured" && Boolean(signal.transcriptText)
+        });
+        await loadState();
+        alert(result.skipped
+          ? result.reason
+          : `本地 ASR 完成：${result.signal?.transcriptText?.length || 0} 字 / ${result.signal?.transcriptSegments?.length || 0} 段，请人工校对后使用。`);
+      } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
     } else if (action === "disposition") {
       await updateRecord("signals", recordId, { disposition: button.dataset.value, seen: true });
     } else if (action === "signal-material") {
@@ -1861,13 +2941,19 @@ document.addEventListener("click", async (event) => {
     } else if (action === "material-topic") {
       const material = state.materials.find((item) => item.id === recordId);
       if (material) {
+        const title = material.excerpt.slice(0, 40);
         await saveRecord("topics", topicDefaults({
-          title: material.excerpt.slice(0, 40),
+          title,
           coreIdea: material.whyValuable,
           targetReader: "待补",
           materialIds: [material.id],
           minimalPublishableVersion: "一条 60-120 秒口播"
         }));
+        const createdTopic = state.topics.find((topic) => topic.title === title && (topic.materialIds || []).includes(material.id));
+        if (createdTopic) {
+          setWorkflowFocusTopic(createdTopic.id);
+          render();
+        }
       }
     } else if (action === "advance-topic") {
       await advanceTopic(recordId);
@@ -1902,6 +2988,13 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("change", async (event) => {
+  if (event.target.matches("[data-workflow-focus-selector]")) {
+    setWorkflowFocusTopic(event.target.value);
+    render();
+    const topic = activeWorkflowTopic();
+    if (topic) requestAnimationFrame(() => openWorkflowPanel(`workflow-${workflowStageGroup(topic.stage)}`));
+    return;
+  }
   const input = event.target.closest("[data-check-kind]");
   if (!input) return;
   const card = input.closest("[data-production-card]");
@@ -1911,9 +3004,8 @@ document.addEventListener("change", async (event) => {
   if (!topicId || !kind || !key) return;
   const topic = topicById(topicId);
   if (!topic) return;
-  const values = { ...(topic[kind] || {}), [key]: input.checked };
   try {
-    await updateRecord("topics", topicId, { [kind]: values });
+    await updateRecord("topics", topicId, { [kind]: { [key]: input.checked } });
   } catch (error) {
     alert(error.message);
   }
@@ -2008,20 +3100,39 @@ document.addEventListener("submit", async (event) => {
     } else if (form.id === "material-form") {
       await saveRecord("materials", { ...formObject(form), topicIds: [] });
     } else if (form.id === "topic-form") {
-      await saveRecord("topics", topicDefaults(formObject(form)));
+      const data = formObject(form);
+      const existingIds = new Set(state.topics.map((topic) => topic.id));
+      await saveRecord("topics", topicDefaults(data));
+      const createdTopic = state.topics.find((topic) => topic.title === data.title && !existingIds.has(topic.id));
+      if (createdTopic) {
+        setWorkflowFocusTopic(createdTopic.id);
+        render();
+      }
     } else if (form.id === "script-form") {
       const data = formObject(form);
+      setWorkflowFocusTopic(data.topicId);
       await saveRecord("scripts", data);
-      if (data.topicId) await updateRecord("topics", data.topicId, { stage: "draft" });
+      if (data.topicId) {
+        const topic = topicById(data.topicId);
+        if (topic?.stage === "outline") await updateRecord("topics", data.topicId, { stage: "draft" });
+      }
     } else if (form.id === "publication-form") {
       const data = formObject(form);
+      setWorkflowFocusTopic(data.topicId);
       await saveRecord("publications", data);
       if (data.status === "published" && data.topicId) {
         const topic = topicById(data.topicId);
-        if (topic && topic.stage !== "reviewed") await updateRecord("topics", data.topicId, { stage: "published" });
+        const publishedPlatforms = new Set(state.publications
+          .filter((item) => item.topicId === data.topicId && item.status === "published")
+          .map((item) => item.platform));
+        const platformsReady = requiredPublicationPlatforms.every((platform) => publishedPlatforms.has(platform));
+        if (topic?.stage === "ready-to-publish" && platformsReady) {
+          await updateRecord("topics", data.topicId, { stage: "published" });
+        }
       }
     } else if (form.id === "review-form") {
       const data = formObject(form);
+      setWorkflowFocusTopic(data.topicId);
       await saveRecord("reviews", data);
       if (data.topicId) await updateRecord("topics", data.topicId, { stage: "reviewed" });
     } else if (form.id === "friction-form") {

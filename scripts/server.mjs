@@ -7,7 +7,12 @@ import { spawn } from "node:child_process";
 import { createBackupStore } from "./backup-store.mjs";
 import { aggregateCollectionEnvelopes, collectionEnvelopeFromRun, finalizeCollectionRun } from "./collection-envelope.mjs";
 import { createEvidenceRuntime, createSignalEvidencePackage, verifyEvidencePackage } from "./evidence-package.mjs";
+import { mediaDescriptions, normalizeDetailCapture } from "./detail-evidence.mjs";
 import { inboxFunnelRuntime } from "./inbox-funnel.mjs";
+import { morningPipelineRuntime } from "./morning-pipeline.mjs";
+import { platformCapabilityRuntime } from "./platform-capabilities.mjs";
+import { resolveSourceIntakeUrl } from "./source-intake.mjs";
+import { applyTranscriptResult, resolveAsrRuntime, transcribeSignal } from "./transcribe-signal.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appDir = path.join(root, "app");
@@ -22,14 +27,17 @@ const dropProcessedDir = path.join(dropDir, "processed");
 const dropFailedDir = path.join(dropDir, "failed");
 const bridgeRoot = process.env.BRIDGE_ROOT ? path.resolve(process.env.BRIDGE_ROOT) : path.join(root, "bridge");
 const evidenceRoot = process.env.EVIDENCE_DIR ? path.resolve(process.env.EVIDENCE_DIR) : path.join(root, "evidence");
+const transcriptRoot = process.env.TRANSCRIPT_DIR ? path.resolve(process.env.TRANSCRIPT_DIR) : path.join(root, "data", "transcripts");
 const agentBridgeOutboxDir = path.join(bridgeRoot, "outbox");
 const port = Number(process.env.PORT || 5177);
 const automationTickMs = Math.max(1000, Number(process.env.AUTOMATION_TICK_MS || 60000));
-const dropScanMs = Math.max(1000, Number(process.env.DROP_SCAN_MS || 10000));
+const dropScanMs = Math.max(1000, Number(process.env.DROP_SCAN_MS || 30000));
 const automaticMethods = new Set(["public-rss", "public-page"]);
+const browserCapturePaths = new Set(["/api/browser-capture", "/api/browser-detail-capture"]);
 const dropExtensions = new Set([".json", ".md", ".txt"]);
 const runningSourceIds = new Set();
 const runningAgentTaskIds = new Set();
+const runningTranscriptSignalIds = new Set();
 let stateMutationQueue = Promise.resolve();
 const browserCaptureTokens = new Map();
 const dropFileStability = new Map();
@@ -60,9 +68,11 @@ const emptyState = () => ({
   collectionRuns: [],
   rawSnapshots: [],
   morningBriefs: [],
+  morningPipelineRuns: [],
   frictionLog: [],
   agentTasks: [],
-  evidencePackages: []
+  evidencePackages: [],
+  transcriptRuns: []
 });
 
 const { stableJsonValue, readBackupFile, listBackups, createBackup } = createBackupStore({
@@ -88,7 +98,9 @@ async function readState() {
       ...parsed,
       settings: { ...emptyState().settings, ...(parsed.settings || {}) },
       agentTasks: Array.isArray(parsed.agentTasks) ? parsed.agentTasks : [],
-      evidencePackages: Array.isArray(parsed.evidencePackages) ? parsed.evidencePackages : []
+      morningPipelineRuns: Array.isArray(parsed.morningPipelineRuns) ? parsed.morningPipelineRuns : [],
+      evidencePackages: Array.isArray(parsed.evidencePackages) ? parsed.evidencePackages : [],
+      transcriptRuns: Array.isArray(parsed.transcriptRuns) ? parsed.transcriptRuns : []
     };
     state.settings.driveRoot = String(state.settings.driveRoot || "").trim();
     refreshEngagementMetrics(state);
@@ -223,6 +235,43 @@ function enqueueStateMutation(operation) {
   return run;
 }
 
+async function runSignalTranscription(signalId, force = false) {
+  const normalizedSignalId = String(signalId || "").trim();
+  if (!normalizedSignalId) throw new Error("signalId is required");
+  if (runningTranscriptSignalIds.has(normalizedSignalId)) {
+    const error = new Error("这条信号的逐字稿正在转写中");
+    error.statusCode = 409;
+    throw error;
+  }
+
+  runningTranscriptSignalIds.add(normalizedSignalId);
+  try {
+    const signal = await enqueueStateMutation(async () => {
+      const state = await readState();
+      const current = state.signals.find((item) => item.id === normalizedSignalId);
+      if (!current) throw new Error("signal not found");
+      return structuredClone(current);
+    });
+
+    // ASR can take minutes; keep it outside the global state mutation queue.
+    const result = await transcribeSignal(signal, {
+      root,
+      transcriptRoot,
+      asrRuntime: await resolveAsrRuntime(root),
+      force: force === true
+    });
+    const persisted = await enqueueStateMutation(async () => {
+      const state = await readState();
+      const applied = applyTranscriptResult(state, normalizedSignalId, result);
+      await writeState(state);
+      return applied;
+    });
+    return { ...result, signal: persisted.signal };
+  } finally {
+    runningTranscriptSignalIds.delete(normalizedSignalId);
+  }
+}
+
 function requestOrigin(request) {
   return request.headers?.origin || "";
 }
@@ -234,7 +283,7 @@ function isLocalOrigin(origin) {
 function apiOriginAllowed(request, pathname) {
   const origin = requestOrigin(request);
   if (!origin || isLocalOrigin(origin)) return true;
-  return pathname === "/api/browser-capture" && origin === "https://www.xiaohongshu.com";
+  return browserCapturePaths.has(pathname) && origin === "https://www.xiaohongshu.com";
 }
 
 function captureTokenFor(sourceId) {
@@ -307,7 +356,9 @@ function sourceControlRecord(state, source, timestamp = Date.now()) {
     nextAction = source.lastCollectionError || latestRun?.failureReason || "查看最近失败原因";
   } else if (controlStatus === "manual") {
     primaryAction = source.collectionMethod === "platform-export" ? "import" : "capture";
-    nextAction = source.collectionMethod === "platform-export"
+    nextAction = source.coverage?.status === "blocked"
+      ? `主页可见 ${source.coverage.lastLoadedCount || 0} 条，但 ${source.coverage.blockedNoteCount || 0} 条缺少可打开 noteId；请从 App 分享感兴趣笔记的链接，再由详情书签补证据`
+      : source.collectionMethod === "platform-export"
       ? "导出平台数据后，用 JSON 导入或本地投递箱入库"
       : "用快速粘贴、JSON 导入或本地投递箱完成人工进料";
   } else if (controlStatus === "backfill") {
@@ -409,7 +460,9 @@ function runtimeState(state) {
     browserCapture: browserCaptureRuntime(state),
     commandCenter: commandCenterRuntime(state),
     inbox: inboxFunnelRuntime(state),
-    evidencePackages: createEvidenceRuntime(state)
+    evidencePackages: createEvidenceRuntime(state),
+    morningPipeline: morningPipelineRuntime(state, { automationEnabled: automationEnabled(state) }),
+    platformCapabilities: platformCapabilityRuntime(state)
   };
 }
 
@@ -607,13 +660,15 @@ function normalizedDate(value = "") {
 function platformContentId(platform = "", value = "") {
   const url = String(value || "");
   const patterns = {
-    xiaohongshu: /\/(?:explore|discovery\/item)\/([A-Za-z0-9]+)/,
+    xiaohongshu: /\/(?:explore|discovery\/item)\/([A-Za-z0-9_-]+)|\/user\/profile\/[A-Za-z0-9_-]+\/([A-Za-z0-9_-]+)/,
     x: /\/status(?:es)?\/(\d+)/,
     douyin: /\/video\/(\d+)/,
     wechat: /\/s\/([A-Za-z0-9_-]+)/
   };
   const pattern = patterns[platform];
-  return pattern ? (url.match(pattern)?.[1] || "") : "";
+  if (!pattern) return "";
+  const match = url.match(pattern);
+  return match?.[1] || match?.[2] || "";
 }
 
 function signalIdentityKeys(record = {}) {
@@ -1290,14 +1345,30 @@ function positiveCount(value) {
   return parsed !== null && parsed > 0 ? parsed : null;
 }
 
-function importBrowserCapture(state, sourceId, items, context = {}) {
+function importBrowserCapture(state, sourceId, items, blockedItems = [], context = {}) {
   const source = state.sources.find((item) => item.id === sourceId);
   if (!source) throw new Error("source not found");
   if (source.collectionMethod !== "browser-assisted") {
     throw new Error("only browser-assisted sources can use browser capture");
   }
-  if (!Array.isArray(items) || items.length === 0) throw new Error("items must be a non-empty array");
+  if (!Array.isArray(items)) throw new Error("items must be an array");
+  if (!Array.isArray(blockedItems)) throw new Error("blockedItems must be an array");
+  if (items.length === 0 && blockedItems.length === 0) {
+    throw new Error("items or blockedItems must be a non-empty array");
+  }
   if (!context || typeof context !== "object") throw new Error("context must be an object");
+
+  const blockedNotes = blockedItems.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("each blocked item must be an object");
+    const title = String(item.title ?? "").trim();
+    if (!title && !item.coverUrl) throw new Error("each blocked item needs a title or cover URL");
+    return {
+      ...item,
+      title,
+      noteId: String(item.noteId ?? "").trim(),
+      reason: item.reason || "note-id-unavailable"
+    };
+  });
 
   const seen = new Set((state.signals || []).flatMap((signal) => signalIdentityKeys(signal)));
   const candidates = [];
@@ -1330,12 +1401,14 @@ function importBrowserCapture(state, sourceId, items, context = {}) {
     status: "running",
     startedAt: now(),
     finishedAt: "",
-    found: items.length,
+    found: items.length + blockedNotes.length,
     created: 0,
     duplicates: items.length - candidates.length,
-    loadedCount: items.length,
+    loadedCount: items.length + blockedNotes.length,
+    blockedNoteCount: blockedNotes.length,
     profileNoteCount: positiveCount(context.profileNoteCount),
     profileFollowers: positiveCount(context.profileFollowers),
+    profileEngagement: positiveCount(context.profileEngagement),
     failureReason: "",
     nextAction: ""
   };
@@ -1349,11 +1422,14 @@ function importBrowserCapture(state, sourceId, items, context = {}) {
     capturedAt: now(),
     format: "browser-assisted",
     context: {
-      visibleNoteCount: items.length,
+      visibleNoteCount: items.length + blockedNotes.length,
+      importableNoteCount: items.length,
+      blockedNoteCount: blockedNotes.length,
       profileNoteCount: run.profileNoteCount,
-      profileFollowers: run.profileFollowers
+      profileFollowers: run.profileFollowers,
+      profileEngagement: run.profileEngagement
     },
-    content: JSON.stringify(items, null, 2).slice(0, 500000)
+    content: JSON.stringify({ items, blockedItems: blockedNotes, context }, null, 2).slice(0, 500000)
   });
 
   for (const item of candidates) {
@@ -1383,36 +1459,117 @@ function importBrowserCapture(state, sourceId, items, context = {}) {
   }
 
   const collectedCount = (state.signals || []).filter((signal) => signal.sourceId === source.id).length;
-  const coverageStatus = !run.profileNoteCount
+  const identityBlocked = blockedNotes.length > 0;
+  const coverageStatus = identityBlocked && (!run.profileNoteCount || collectedCount < run.profileNoteCount)
+    ? "blocked"
+    : !run.profileNoteCount
     ? "unknown"
     : collectedCount >= run.profileNoteCount ? "complete" : "partial";
   const coveragePercent = run.profileNoteCount
     ? Math.min(100, Math.round((collectedCount / run.profileNoteCount) * 100))
     : null;
 
-  run.status = run.created > 0 ? "ok" : "ok-no-new";
+  run.status = identityBlocked && candidates.length === 0
+    ? "blocked"
+    : run.created > 0 ? "ok" : "ok-no-new";
   run.finishedAt = now();
   run.collectedCount = collectedCount;
   run.coverageStatus = coverageStatus;
   run.coveragePercent = coveragePercent;
-  run.nextAction = coverageStatus === "complete"
+  run.nextAction = coverageStatus === "blocked"
+    ? `主页 ${run.loadedCount} 条可见，但 ${blockedNotes.length} 条缺少可打开 noteId；请从 App 分享目标笔记链接后用详情书签补证据`
+    : coverageStatus === "complete"
     ? "本页范围已覆盖主页显示笔记数；后续按档期做增量采集"
     : coverageStatus === "partial"
       ? `继续在原主页向下手动滚动，并重复点击采集书签；当前累计 ${collectedCount}/${run.profileNoteCount}`
       : "主页未识别到笔记总数；继续滚动到目标范围后重复采集";
   source.lastRunStatus = run.status;
   source.lastRunAt = run.finishedAt;
+  if (run.profileFollowers) source.profileFollowers = run.profileFollowers;
+  if (run.profileEngagement) source.profileEngagement = run.profileEngagement;
   source.coverage = {
     totalNotes: run.profileNoteCount,
     collectedCount,
     lastLoadedCount: run.loadedCount,
     status: coverageStatus,
     percent: coveragePercent,
+    blockedNoteCount: blockedNotes.length,
+    identityStatus: identityBlocked ? "note-id-unavailable" : "available",
     updatedAt: run.finishedAt
   };
   refreshEngagementMetrics(state);
   finalizeCollectionRun(run);
   return run;
+}
+
+function importBrowserDetailCapture(state, signalId, sourceId, capture) {
+  const signal = (state.signals || []).find((item) => item.id === signalId);
+  if (!signal) throw new Error("signal not found");
+  if (signal.platform !== "xiaohongshu") throw new Error("detail capture only supports Xiaohongshu signals");
+  if (!signal.sourceId || signal.sourceId !== sourceId) throw new Error("capture source does not match signal source");
+  const source = (state.sources || []).find((item) => item.id === sourceId);
+  if (!source) throw new Error("source not found");
+  if (source.collectionMethod !== "browser-assisted") {
+    throw new Error("only browser-assisted sources can use browser detail capture");
+  }
+
+  const timestamp = now();
+  const normalized = normalizeDetailCapture(signal, capture, timestamp);
+  const snapshot = {
+    id: id("snapshot"),
+    sourceId,
+    signalId: signal.id,
+    url: normalized.capture.captureUrl,
+    capturedAt: timestamp,
+    format: "browser-detail-assisted",
+    context: {
+      captureScope: "user-visible-detail-page",
+      noteId: normalized.capture.noteId,
+      mediaCount: normalized.capture.mediaItems.length,
+      transcriptStatus: normalized.capture.transcriptStatus,
+      autoScroll: false,
+      privateApiCalled: false,
+      mediaDownloaded: false
+    },
+    content: JSON.stringify(normalized.capture, null, 2).slice(0, 500000)
+  };
+  state.rawSnapshots.unshift(snapshot);
+
+  const existingMediaItems = Array.isArray(signal.mediaItems) ? signal.mediaItems : [];
+  const mediaItems = [...existingMediaItems, ...normalized.capture.mediaItems]
+    .filter((item, index, items) => item?.url && items.findIndex((other) => other.url === item.url) === index)
+    .slice(0, 50);
+  const nextContentText = normalized.patch.contentText || signal.contentText || "";
+  const successfulDetailCapture = !normalized.capture.extraction.redirectedFromDetailUrl;
+  Object.assign(signal, normalized.patch, {
+    ...(successfulDetailCapture ? { url: normalized.capture.captureUrl } : {}),
+    mediaItems,
+    imageDescriptions: mediaDescriptions(mediaItems, signal.imageDescriptions),
+    dataPointCandidates: nextContentText
+      ? extractDataPointCandidates([nextContentText])
+      : (signal.dataPointCandidates || []),
+    rawSnapshotId: snapshot.id,
+    updatedAt: timestamp
+  });
+  source.lastDetailCaptureAt = timestamp;
+  refreshEngagementMetrics(state);
+
+  const evidencePackage = (state.evidencePackages || []).find((item) => item.signalId === signal.id) || null;
+  if (evidencePackage) {
+    evidencePackage.verification = {
+      state: "unverified",
+      checkedAt: "",
+      checkedBy: "",
+      note: "详情证据已更新，原始证据包需要重建并重新人工核对。"
+    };
+    evidencePackage.updatedAt = timestamp;
+  }
+  return {
+    signal,
+    snapshot,
+    evidencePackageId: evidencePackage?.id || "",
+    rebuildEvidenceRecommended: Boolean(evidencePackage)
+  };
 }
 
 function firstUrlInText(value) {
@@ -1439,34 +1596,6 @@ function sourceIntakeCount(text, pattern) {
   return positiveCount(`${match[1]}${match[2] || ""}`);
 }
 
-async function resolveSourceIntakeUrl(url) {
-  const parsed = new URL(url);
-  if (!/^https?:$/.test(parsed.protocol)) throw new Error("only http(s) links are supported");
-  if (parsed.hostname.toLowerCase() !== "xhslink.cn") return url;
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-  try {
-    const response = await fetch(url, {
-      method: "HEAD",
-      redirect: "follow",
-      credentials: "omit",
-      signal: controller.signal
-    });
-    await response.body?.cancel().catch(() => {});
-    const finalUrl = normalizeUrl(response.url || response.headers.get("location") || "");
-    if (!finalUrl || detectSourcePlatform(finalUrl) !== "xiaohongshu") {
-      throw new Error("short link did not resolve to a Xiaohongshu page; paste the final profile URL");
-    }
-    return finalUrl;
-  } catch (error) {
-    if (error.name === "AbortError") throw new Error("short link resolution timed out; paste the final profile URL");
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function importSourceIntake(state, text) {
   const rawUrl = firstUrlInText(text);
   if (!rawUrl) throw new Error("paste a source URL or platform share text with a URL");
@@ -1475,6 +1604,7 @@ async function importSourceIntake(state, text) {
   const name = sourceIntakeName(text);
   const profileFollowers = sourceIntakeCount(text, /([\d,.]+)\s*(万|亿|[kK])?\s*(?:个)?粉丝/);
   const profileNoteCount = sourceIntakeCount(text, /([\d,.]+)\s*(万|亿|[kK])?\s*(?:篇)?笔记/);
+  const profileEngagement = sourceIntakeCount(text, /([\d,.]+)\s*(万|亿|[kK])?\s*\+?\s*(?:次)?(?:获)?赞与收藏/);
   const isXhsProfile = platform === "xiaohongshu"
     && /\/user\/profile\/[A-Za-z0-9]+/.test(new URL(url).pathname);
 
@@ -1484,7 +1614,7 @@ async function importSourceIntake(state, text) {
 
   const existingSource = (state.sources || []).find((item) => normalizeUrl(item.url) === url);
   const incomingSource = existingSource
-    ? { name, platform, account: name, url, profileFollowers }
+    ? { name, platform, account: name, url, profileFollowers, profileEngagement }
     : {
       name,
       platform,
@@ -1495,6 +1625,7 @@ async function importSourceIntake(state, text) {
       collectionMethod: platform === "xiaohongshu" ? "browser-assisted" : "public-page",
       dataBoundary: platform === "xiaohongshu" ? "manual-copy" : "public",
       profileFollowers,
+      profileEngagement,
       keepReason: "对标账号快速登记",
       coverage: {
         totalNotes: profileNoteCount,
@@ -2596,8 +2727,26 @@ function patchRecord(type, record, patch = {}) {
   if (!suppliedFields.length) throw new Error("patch cannot be empty");
 
   const updated = { ...record };
-  for (const field of suppliedFields) updated[field] = patch[field];
+  for (const field of suppliedFields) {
+    if (type === "topics" && (field === "productionChecks" || field === "gates")) {
+      if (!patch[field] || Array.isArray(patch[field]) || typeof patch[field] !== "object") {
+        throw new Error(`${field} must be an object`);
+      }
+      updated[field] = { ...(record[field] || {}), ...patch[field] };
+    } else {
+      updated[field] = patch[field];
+    }
+  }
   return updated;
+}
+
+function validatePublicationRecord(state, record = {}) {
+  if (record.status !== "published") return;
+  const topic = (state.topics || []).find((item) => item.id === record.topicId);
+  if (!topic) throw new Error("published publication must be linked to a topic");
+  if (!["ready-to-publish", "published"].includes(topic.stage)) {
+    throw new Error("选题到达待发阶段后，才能记录已发布");
+  }
 }
 
 function validateTopicStageTransition(state, topic, nextStage) {
@@ -2610,6 +2759,12 @@ function validateTopicStageTransition(state, topic, nextStage) {
     const gates = topic.gates || {};
     const missingGates = ["evidence", "opening", "sample", "final"].filter((key) => gates[key] !== true);
     if (missingGates.length) throw new Error(`四个人工关卡未全部通过：${missingGates.join("、")}`);
+  }
+  if (topic.stage === "review") {
+    const checks = topic.productionChecks || {};
+    const missingChecks = ["coreIdea", "targetReader", "hook", "outline", "evidence", "visuals", "publishPackage"]
+      .filter((key) => checks[key] !== true);
+    if (missingChecks.length) throw new Error(`七项生产检查未全部通过：${missingChecks.join("、")}`);
   }
   if (nextStage === "published") {
     const published = new Set((state.publications || [])
@@ -2643,13 +2798,74 @@ async function runAgentResultScanQueued() {
   }
 }
 
+let morningPipelineBusy = false;
+async function runMorningPipelineQueued() {
+  if (morningPipelineBusy) {
+    throw new Error("previous morning pipeline is still running");
+  }
+  morningPipelineBusy = true;
+  const startedAt = now();
+  try {
+    const operations = {
+      dropFolder: await runDropFolderScanQueued("morning-pipeline", true),
+      collection: await runAutomationTickQueued(false),
+      agentResults: await runAgentResultScanQueued()
+    };
+
+    const run = await enqueueStateMutation(async () => {
+      const state = await readState();
+      const briefChanged = refreshMorningBrief(state);
+      const pipeline = morningPipelineRuntime(state, { automationEnabled: automationEnabled(state) });
+      const record = {
+        id: id("morning-pipeline"),
+        startedAt,
+        finishedAt: now(),
+        briefChanged,
+        stages: pipeline.stages,
+        nextActions: pipeline.nextActions,
+        operations: {
+          dropFolder: {
+            status: operations.dropFolder?.skipped ? "skipped" : "ok",
+            total: operations.dropFolder?.total || 0,
+            created: operations.dropFolder?.created || 0,
+            failed: operations.dropFolder?.failed || 0
+          },
+          collection: {
+            status: operations.collection?.skipped ? "skipped" : "ok",
+            total: operations.collection?.total || 0,
+            envelope: operations.collection?.envelope || null
+          },
+          agentResults: {
+            status: "ok",
+            changed: operations.agentResults?.changed === true,
+            readyCount: operations.agentResults?.readyCount || 0
+          }
+        }
+      };
+      state.morningPipelineRuns = [record, ...(state.morningPipelineRuns || [])].slice(0, 30);
+      await writeState(state);
+      return record;
+    });
+
+    return {
+      ok: true,
+      run,
+      dropFolder: operations.dropFolder,
+      collection: operations.collection,
+      agentResults: operations.agentResults
+    };
+  } finally {
+    morningPipelineBusy = false;
+  }
+}
+
 async function handleApi(request, response, pathname) {
   if (!apiOriginAllowed(request, pathname)) {
     return sendJson(response, 403, { ok: false, error: "origin not allowed" }, request);
   }
 
   if (request.method === "OPTIONS" && pathname.startsWith("/api/")) {
-    const headers = pathname === "/api/browser-capture"
+    const headers = browserCapturePaths.has(pathname)
       ? browserCaptureCorsHeaders(request)
       : corsHeaders(request);
     if (!headers["access-control-allow-origin"]) {
@@ -2683,12 +2899,12 @@ async function handleApi(request, response, pathname) {
   try {
     body = await readBody(request);
   } catch (error) {
-    const captureOrigin = pathname === "/api/browser-capture" && requestOrigin(request) === "https://www.xiaohongshu.com";
+    const captureOrigin = browserCapturePaths.has(pathname) && requestOrigin(request) === "https://www.xiaohongshu.com";
     const headers = captureOrigin ? browserCaptureCorsHeaders(request) : undefined;
     const status = error instanceof RequestBodyError ? error.status : 400;
     return sendJson(response, status, { ok: false, error: error.message }, request, headers || undefined);
   }
-  const isXhsCapture = pathname === "/api/browser-capture" && requestOrigin(request) === "https://www.xiaohongshu.com";
+  const isXhsCapture = browserCapturePaths.has(pathname) && requestOrigin(request) === "https://www.xiaohongshu.com";
   if (isXhsCapture) {
     const token = browserCaptureTokens.get(String(body.sourceId || ""));
     const supplied = String(request.headers["x-capture-token"] || "");
@@ -2763,6 +2979,7 @@ async function handleApi(request, response, pathname) {
       if (!allowed.includes(type)) return sendJson(response, 400, { error: "unknown record type" }, request);
       const result = await enqueueStateMutation(async () => {
         const state = await readState();
+        if (type === "publications") validatePublicationRecord(state, body.record || {});
         const totals = importRecords(state, type, [body.record || {}]);
         refreshEngagementMetrics(state);
         await writeState(state);
@@ -2808,6 +3025,11 @@ async function handleApi(request, response, pathname) {
 
     if (pathname === "/api/automation/tick") {
       const result = await runAutomationTickQueued(body.force === true);
+      return sendJson(response, 200, result, request);
+    }
+
+    if (pathname === "/api/morning-pipeline/run") {
+      const result = await runMorningPipelineQueued();
       return sendJson(response, 200, result, request);
     }
 
@@ -2881,12 +3103,34 @@ async function handleApi(request, response, pathname) {
       return sendJson(response, result.ok ? 200 : 400, result, request);
     }
 
+    if (pathname === "/api/signals/transcript") {
+      const result = await runSignalTranscription(body.signalId, body.force === true);
+      return sendJson(response, 200, result, request);
+    }
+
     if (pathname === "/api/browser-capture") {
       const result = await enqueueStateMutation(async () => {
         const state = await readState();
-        const run = importBrowserCapture(state, body.sourceId, body.items, body.context || {});
+        const run = importBrowserCapture(
+          state,
+          body.sourceId,
+          body.items,
+          body.blockedItems || [],
+          body.context || {}
+        );
         await writeState(state);
         return { ok: true, run };
+      });
+      const headers = isXhsCapture ? browserCaptureCorsHeaders(request) : undefined;
+      return sendJson(response, 200, result, request, headers || undefined);
+    }
+
+    if (pathname === "/api/browser-detail-capture") {
+      const result = await enqueueStateMutation(async () => {
+        const state = await readState();
+        const result = importBrowserDetailCapture(state, body.signalId, body.sourceId, body.capture);
+        await writeState(state);
+        return { ok: true, ...result };
       });
       const headers = isXhsCapture ? browserCaptureCorsHeaders(request) : undefined;
       return sendJson(response, 200, result, request, headers || undefined);

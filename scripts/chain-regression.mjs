@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { platformCapabilityRuntime } from "./platform-capabilities.mjs";
+import { createSignalEvidencePackage } from "./evidence-package.mjs";
+import { normalizeDetailCapture } from "./detail-evidence.mjs";
+import { resolveSourceIntakeUrl } from "./source-intake.mjs";
+import { applyTranscriptResult, selectTranscriptMedia } from "./transcribe-signal.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const checks = [];
@@ -135,7 +140,7 @@ async function waitForServer(base) {
   throw new Error(`temporary workbench did not start: ${lastError}`);
 }
 
-async function startWorkbench(port, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir) {
+async function startWorkbench(port, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir, transcriptDir) {
   const child = spawn(process.execPath, [path.join(repoRoot, "scripts/server.mjs")], {
     cwd: repoRoot,
     env: {
@@ -146,6 +151,8 @@ async function startWorkbench(port, dataFile, dropDir, bridgeRoot, backupDir, ev
       BRIDGE_ROOT: bridgeRoot,
       BACKUP_DIR: backupDir,
       EVIDENCE_DIR: evidenceDir,
+      TRANSCRIPT_DIR: transcriptDir,
+      WORKBENCH_ASR_CONFIG: path.join(tempRoot, "missing-asr-runtime.local.json"),
       AUTOMATION_ENABLED: "false",
       AUTOMATION_TICK_MS: "60000",
       DROP_SCAN_MS: "60000"
@@ -198,11 +205,13 @@ async function main() {
   const driveRoot = path.join(tempRoot, "drive-root");
   const backupDir = path.join(tempRoot, "backups");
   const evidenceDir = path.join(tempRoot, "evidence");
+  const transcriptDir = path.join(tempRoot, "transcripts");
   await fs.mkdir(dropDir, { recursive: true });
   await fs.mkdir(bridgeRoot, { recursive: true });
   await fs.mkdir(driveRoot, { recursive: true });
   await fs.mkdir(backupDir, { recursive: true });
   await fs.mkdir(evidenceDir, { recursive: true });
+  await fs.mkdir(transcriptDir, { recursive: true });
 
   const mockPort = await getPort();
   const workbenchPort = await getPort();
@@ -218,8 +227,57 @@ async function main() {
   });
   await new Promise((resolve) => mockServer.listen(mockPort, "127.0.0.1", resolve));
 
-  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir);
+  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir, transcriptDir);
   await waitForServer(base);
+
+  const provenanceSignal = {
+    id: "signal-provenance-regression",
+    sourceId: "source-provenance-regression",
+    collectionRunId: "",
+    rawSnapshotId: "snapshot-linked",
+    title: "Evidence provenance regression",
+    url: "https://example.com/evidence-provenance-regression"
+  };
+  const provenanceState = {
+    sources: [],
+    collectionRuns: [],
+    signals: [provenanceSignal],
+    rawSnapshots: [
+      { id: "snapshot-linked", runId: "" },
+      { id: "snapshot-unrelated-one", runId: "" },
+      { id: "snapshot-unrelated-two", runId: "" }
+    ],
+    evidencePackages: []
+  };
+  const provenancePackage = await createSignalEvidencePackage({
+    state: provenanceState,
+    signalId: provenanceSignal.id,
+    evidenceRoot: evidenceDir
+  });
+  const provenanceMeta = JSON.parse(await fs.readFile(
+    path.join(provenancePackage.packageDirectory, "meta.json"),
+    "utf8"
+  ));
+  equal(
+    JSON.stringify(provenanceMeta.provenance.rawSnapshotIds),
+    JSON.stringify(["snapshot-linked"]),
+    "evidence provenance excludes unrelated empty-run snapshots"
+  );
+  pass("证据包 provenance 不会把空 runId 的无关快照混入来源链");
+
+  let shortLinkRequestMethod = "";
+  const resolvedShortLink = await resolveSourceIntakeUrl("https://xhslink.cn/o/regression", async (input, options) => {
+    shortLinkRequestMethod = options.method;
+    const target = "https://www.xiaohongshu.com/user/profile/regressionprofile?xsec_token=temporary";
+    return {
+      url: `https://www.xiaohongshu.com/login?redirectPath=${encodeURIComponent(target)}`,
+      headers: new Map(),
+      arrayBuffer: async () => new ArrayBuffer(0)
+    };
+  });
+  equal(shortLinkRequestMethod, "GET", "XHS short-link resolution HTTP method");
+  equal(resolvedShortLink, "https://www.xiaohongshu.com/user/profile/regressionprofile", "XHS login redirect profile canonicalization");
+  pass("小红书短链从登录重定向参数还原主页并保留无参数身份");
 
   // Import identity keeps manual Inbox decisions instead of pushing records back to Inbox.
   await api(base, "/api/import", {
@@ -275,6 +333,11 @@ async function main() {
   truthy(lifecycleTopic.gates, "new topic gates");
   pass("API 新导入选题强制从 topic 开始");
 
+  await failingApi(base, "/api/record", {
+    type: "publications",
+    record: { topicId: lifecycleTopic.id, platform: "douyin", status: "published" }
+  }, /待发阶段/);
+
   const materialUrl = "https://example.com/material";
   await api(base, "/api/import", {
     materials: [{
@@ -307,6 +370,11 @@ async function main() {
     patch: { gates: { evidence: true, opening: true, sample: true, final: true } }
   });
   await updateStage(base, lifecycleTopic.id, "review");
+  await failingApi(base, "/api/update", {
+    type: "topics",
+    id: lifecycleTopic.id,
+    patch: { stage: "ready-to-publish" }
+  }, /七项生产检查/);
   await api(base, "/api/update", {
     type: "topics",
     id: lifecycleTopic.id,
@@ -455,16 +523,17 @@ async function main() {
   match(legacyCommand.nextAction, /主页总数待确认/, "legacy browser source command next action");
 
   const xhsSource = (await api(base, "/api/source-intake", {
-    text: "@回归博主 在小红书已经有1.2万个粉丝、5篇笔记 https://www.xiaohongshu.com/user/profile/regression-profile"
+    text: "@回归博主 在小红书已经有1.2万个粉丝、3000次赞与收藏、5篇笔记 https://www.xiaohongshu.com/user/profile/regressionprofile"
   })).source;
   equal(xhsSource.platform, "xiaohongshu", "source intake platform");
   equal(xhsSource.collectionMethod, "browser-assisted", "source intake collection method");
   equal(xhsSource.profileFollowers, 12000, "source intake follower count");
+  equal(xhsSource.profileEngagement, 3000, "source intake profile engagement count");
   equal(xhsSource.coverage.status, "partial", "source intake initial coverage");
 
   const firstCapture = (await api(base, "/api/browser-capture", {
     sourceId: xhsSource.id,
-    context: { profileNoteCount: 5, profileFollowers: 12000 },
+    context: { profileNoteCount: 5, profileFollowers: 12000, profileEngagement: 3000 },
     items: [
       { url: "https://www.xiaohongshu.com/explore/one", title: "One", engagement: "10" },
       { url: "https://www.xiaohongshu.com/explore/two", title: "Two", engagement: "20" },
@@ -473,6 +542,7 @@ async function main() {
   })).run;
   equal(firstCapture.loadedCount, 3, "first visible capture loaded count");
   equal(firstCapture.profileNoteCount, 5, "first visible capture profile total");
+  equal(firstCapture.profileEngagement, 3000, "first visible capture profile engagement");
   equal(firstCapture.collectedCount, 3, "first visible capture collected count");
   equal(firstCapture.coveragePercent, 60, "first visible capture coverage percent");
   equal(firstCapture.coverageStatus, "partial", "first visible capture coverage status");
@@ -509,13 +579,57 @@ async function main() {
   equal(completeCommand.primaryAction, "wait", "command center primary action after complete capture");
   match(completeCommand.nextAction, /5\/5/, "command center next action after complete capture");
   const duplicateIntake = (await api(base, "/api/source-intake", {
-    text: "@回归博主 在小红书已经有1.3万个粉丝 https://www.xiaohongshu.com/user/profile/regression-profile"
+    text: "@回归博主 在小红书已经有1.3万个粉丝、3400次赞与收藏 https://www.xiaohongshu.com/user/profile/regressionprofile"
   })).source;
   equal(duplicateIntake.profileFollowers, 13000, "duplicate source intake follower metadata");
+  equal(duplicateIntake.profileEngagement, 3400, "duplicate source intake profile engagement metadata");
   equal(duplicateIntake.coverage.collectedCount, 5, "duplicate source intake collected coverage");
   equal(duplicateIntake.coverage.percent, 100, "duplicate source intake coverage percent");
   truthy(current.rawSnapshots.some((snapshot) => snapshot.context?.profileNoteCount === 5), "visible capture snapshot context");
   pass("对标分享文案可登记，重复采集和重复登记都会保留覆盖率");
+
+  const blockedProfileSource = (await api(base, "/api/source-intake", {
+    text: "@游客态受限博主 在小红书已经有232篇笔记 https://www.xiaohongshu.com/user/profile/blockedregression"
+  })).source;
+  const blockedProfileCapture = (await api(base, "/api/browser-capture", {
+    sourceId: blockedProfileSource.id,
+    context: {
+      profileNoteCount: 232,
+      profileFollowers: 8000,
+      profileEngagement: 20000,
+      captureScope: "user-visible-profile-state",
+      autoScroll: false,
+      privateApiCalled: false
+    },
+    items: [],
+    blockedItems: Array.from({ length: 12 }, (_, index) => ({
+      title: "游客态可见笔记 " + (index + 1),
+      engagement: String(100 + index),
+      coverUrl: "https://sns-img-xhscdn.xhscdn.com/blocked-" + index + ".jpg",
+      xsecToken: "token-" + index,
+      noteId: "",
+      reason: "note-id-unavailable"
+    }))
+  })).run;
+  equal(blockedProfileCapture.status, "blocked", "blocked profile capture status");
+  equal(blockedProfileCapture.loadedCount, 12, "blocked profile capture loaded count");
+  equal(blockedProfileCapture.created, 0, "blocked profile capture created count");
+  equal(blockedProfileCapture.blockedNoteCount, 12, "blocked profile capture blocked note count");
+  equal(blockedProfileCapture.coverageStatus, "blocked", "blocked profile capture coverage status");
+  equal(blockedProfileCapture.envelope.blocked, 1, "blocked profile capture envelope blocked count");
+  current = await state(base);
+  const blockedSource = current.sources.find((source) => source.id === blockedProfileSource.id);
+  equal(blockedSource.coverage.identityStatus, "note-id-unavailable", "blocked source identity status");
+  equal(current.signals.filter((signal) => signal.sourceId === blockedProfileSource.id).length, 0, "blocked profile signals withheld from Inbox");
+  const blockedCommand = current.runtime.commandCenter.records.find((record) => record.sourceId === blockedProfileSource.id);
+  equal(blockedCommand.controlStatus, "manual", "blocked source command status");
+  equal(blockedCommand.primaryAction, "capture", "blocked source command action");
+  match(blockedCommand.nextAction, /缺少可打开 noteId.*App 分享/, "blocked source command next action");
+  const blockedSnapshot = current.rawSnapshots.find((snapshot) => snapshot.runId === blockedProfileCapture.id);
+  const blockedSnapshotContent = JSON.parse(blockedSnapshot.content);
+  equal(blockedSnapshotContent.blockedItems.length, 12, "blocked profile raw snapshot item count");
+  equal(blockedSnapshotContent.context.privateApiCalled, false, "blocked profile raw snapshot boundary");
+  pass("小红书主页游客态可见但缺 noteId 时保留 blocked 快照，不伪造 Inbox 链接");
 
   const evidenceSignal = current.signals.find((signal) => signal.url === "https://www.xiaohongshu.com/explore/four");
   const firstEvidence = await api(base, "/api/evidence-packages/create", { signalId: evidenceSignal.id });
@@ -547,7 +661,141 @@ async function main() {
   equal(current.evidencePackages.length, 1, "evidence package identity count");
   equal(current.runtime.evidencePackages.total, 1, "evidence runtime total");
   equal(current.runtime.evidencePackages.verified, 1, "evidence runtime verified count");
+
+  const detailCapture = await api(base, "/api/browser-detail-capture", {
+    signalId: evidenceSignal.id,
+    sourceId: xhsSource.id,
+    capture: {
+      noteId: "four",
+      captureUrl: "https://www.xiaohongshu.com/explore/four?xsec_token=detail",
+      title: "Four detail",
+      author: "回归博主",
+      bodyText: "这是详情正文，包含一个数据口径：转化率 37%。",
+      coverUrl: "https://sns-webpic-qc.xhscdn.com/cover.jpg",
+      mediaItems: [
+        { type: "image", url: "https://sns-webpic-qc.xhscdn.com/cover.jpg", description: "封面图" },
+        { type: "video", url: "https://sns-video-hw.xhscdn.com/stream.mp4", description: "视频" }
+      ],
+      engagement: "58",
+      transcriptStatus: "missing",
+      rawPageText: "可见页面文本"
+    }
+  });
+  truthy(detailCapture.ok, "browser detail capture result flag");
+  equal(detailCapture.signal.contentText, "这是详情正文，包含一个数据口径：转化率 37%。", "detail capture body text");
+  equal(detailCapture.signal.coverUrl, "https://sns-webpic-qc.xhscdn.com/cover.jpg", "detail capture cover URL");
+  equal(detailCapture.signal.mediaItems.length, 2, "detail capture media count");
+  equal(detailCapture.signal.transcriptStatus, "missing", "detail capture missing transcript status");
+  equal(detailCapture.signal.transcriptText, "", "detail capture does not fabricate transcript text");
+  equal(detailCapture.signal.url, "https://www.xiaohongshu.com/explore/four?xsec_token=detail", "successful detail capture updates signal URL");
+  truthy(detailCapture.rebuildEvidenceRecommended, "detail capture evidence rebuild recommendation");
+  equal(detailCapture.evidencePackageId, firstEvidence.record.id, "detail capture evidence identity");
+  const legacyDetail = normalizeDetailCapture(
+    { id: "legacy-signal", sourceId: xhsSource.id, url: "https://www.xiaohongshu.com/user/profile/regressionprofile/legacy-note" },
+    { noteId: "legacy-note", captureUrl: "https://www.xiaohongshu.com/user/profile/regressionprofile/legacy-note", bodyText: "旧链接详情正文" }
+  );
+  equal(legacyDetail.capture.noteId, "legacy-note", "legacy XHS profile detail note ID");
+  const blockedDetail = normalizeDetailCapture(
+    { id: "blocked-signal", sourceId: xhsSource.id, url: "https://www.xiaohongshu.com/explore/blocked-note" },
+    {
+      noteId: "blocked-note",
+      captureUrl: "https://www.xiaohongshu.com/explore/blocked-note",
+      effectiveUrl: "https://www.xiaohongshu.com/404?error_code=300031",
+      transcriptStatus: "blocked",
+      rawPageText: "当前笔记暂时无法浏览"
+    }
+  );
+  equal(blockedDetail.patch.transcriptStatus, "blocked", "blocked detail transcript status");
+  equal(Object.prototype.hasOwnProperty.call(blockedDetail.patch, "contentText"), false, "blocked detail does not collect unrelated content");
+  equal(blockedDetail.capture.extraction.redirectedFromDetailUrl, true, "blocked detail redirect boundary");
+  await failingApi(base, "/api/browser-detail-capture", {
+    signalId: evidenceSignal.id,
+    sourceId: xhsSource.id,
+    capture: { ...detailCapture.snapshot, noteId: "wrong", captureUrl: "https://www.xiaohongshu.com/explore/wrong" }
+  }, /does not match signal/);
+  current = await state(base);
+  const detailSignal = current.signals.find((signal) => signal.id === evidenceSignal.id);
+  const detailSnapshot = current.rawSnapshots.find((snapshot) => snapshot.id === detailSignal.rawSnapshotId);
+  equal(detailSnapshot.format, "browser-detail-assisted", "detail capture snapshot format");
+  equal(detailSnapshot.context.transcriptStatus, "missing", "detail capture snapshot transcript status");
+  match(detailSnapshot.content, /privateApiCalled": false/, "detail capture snapshot boundary");
+  const rebuiltEvidence = await api(base, "/api/evidence-packages/create", { signalId: evidenceSignal.id });
+  equal(rebuiltEvidence.created, false, "detail capture rebuild preserves evidence identity");
+  const rebuiltMediaManifest = JSON.parse(await fs.readFile(
+    path.join(evidenceDir, rebuiltEvidence.record.packageKey, "media-manifest.json"),
+    "utf8"
+  ));
+  equal(rebuiltMediaManifest.items.length, 2, "detail evidence media manifest count");
+  equal(rebuiltMediaManifest.items.some((item) => item.type === "video"), true, "detail evidence video manifest type");
+  pass("小红书详情书签可补齐正文、封面、媒体清单并如实标记逐字稿缺失");
   pass("分层证据包支持原始快照、候选摘录、媒体清单、哈希和人工核对留痕");
+
+  equal(selectTranscriptMedia({
+    mediaItems: [{ type: "video", url: "https://sns-video-hw.xhscdn.com/stream.m4s" }]
+  }), null, "local ASR media selector rejects m4s segments");
+  equal(selectTranscriptMedia({
+    mediaItems: [
+      { type: "video", url: "https://sns-video-hw.xhscdn.com/stream.m4s" },
+      { type: "video", url: "https://sns-video-hw.xhscdn.com/stream.mp4" }
+    ]
+  }).url, "https://sns-video-hw.xhscdn.com/stream.mp4", "local ASR media selector accepts full MP4");
+
+  const transcriptState = {
+    signals: [{ id: "transcript-regression", transcriptStatus: "missing", transcriptText: "" }],
+    transcriptRuns: []
+  };
+  const failedTranscript = applyTranscriptResult(transcriptState, "transcript-regression", {
+    ok: false,
+    error: "本地 ASR 未配置",
+    run: { id: "failed-run", status: "failed", error: "本地 ASR 未配置" }
+  });
+  equal(failedTranscript.signal.transcriptStatus, "failed", "failed ASR result status");
+  equal(failedTranscript.signal.transcriptText, "", "failed ASR result does not fabricate text");
+  applyTranscriptResult(transcriptState, "transcript-regression", {
+    ok: true,
+    patch: {
+      transcriptStatus: "captured",
+      transcriptText: "这是真实转写文本。",
+      transcriptSegments: [{ start: 0, end: 1, text: "这是真实转写文本。" }]
+    },
+    run: { id: "captured-run", status: "captured" }
+  });
+  applyTranscriptResult(transcriptState, "transcript-regression", {
+    ok: false,
+    error: "第二次运行失败",
+    run: { id: "second-failed-run", status: "failed", error: "第二次运行失败" }
+  });
+  equal(transcriptState.signals[0].transcriptStatus, "captured", "later failed ASR preserves captured status");
+  equal(transcriptState.signals[0].transcriptText, "这是真实转写文本。", "later failed ASR preserves captured text");
+  equal(transcriptState.transcriptRuns.length, 3, "transcript run retention count");
+  pass("本地 ASR 只在成功时升级 captured，失败不覆盖旧真实逐字稿");
+
+  const transcriptEvidence = await createSignalEvidencePackage({
+    state: transcriptState,
+    signalId: "transcript-regression",
+    evidenceRoot: path.join(evidenceDir, "transcript-manual")
+  });
+  const transcriptEvidenceDirectory = path.join(evidenceDir, "transcript-manual", transcriptEvidence.record.packageKey);
+  const transcriptEvidenceText = await fs.readFile(path.join(transcriptEvidenceDirectory, "candidate", "transcript.md"), "utf8");
+  truthy(transcriptEvidenceText.includes("这是真实转写文本。"), "evidence package transcript text");
+  truthy(transcriptEvidenceText.includes("00:00.000 - 00:01.000"), "evidence package transcript timeline");
+  truthy(transcriptEvidence.record.layers.includes("candidate-transcript"), "evidence package transcript layer");
+  const transcriptChecksums = await fs.readFile(path.join(transcriptEvidenceDirectory, "checksums.sha256"), "utf8");
+  truthy(transcriptChecksums.includes("candidate/transcript.md"), "evidence package transcript checksum");
+  pass("证据包会把本地 ASR 全文和时间轴作为待人工校对层保存");
+
+  const transcriptFailure = await requestJson(base, "/api/signals/transcript", {
+    signalId: evidenceSignal.id,
+    force: false
+  });
+  equal(transcriptFailure.status, 200, "transcript API failure HTTP status");
+  equal(transcriptFailure.payload.ok, false, "transcript API failure result flag");
+  match(transcriptFailure.payload.error, /本地 ASR 未配置/, "transcript API ASR configuration error");
+  equal(transcriptFailure.payload.run.status, "failed", "transcript API failed run status");
+  current = await state(base);
+  equal(current.signals.find((signal) => signal.id === evidenceSignal.id).transcriptStatus, "failed", "transcript API persists failed status");
+  equal(current.transcriptRuns.length, 1, "transcript API run persistence count");
+  pass("单条信号转写 API 失败时保留可重试运行记录，不伪造成功");
 
   // A 200 HTML response is a failed collection, not a successful RSS import.
   const feedSource = (await api(base, "/api/import", {
@@ -599,6 +847,47 @@ async function main() {
   truthy(current.signals.some((signal) => signal.url === "https://example.com/drop-signal"), "drop signal imported");
   pass("投递箱文件首轮 pending，第二轮稳定后入库并归档");
 
+  const capability = platformCapabilityRuntime({
+    sources: [
+      { platform: "x" },
+      { platform: "x" },
+      { platform: "xiaohongshu" }
+    ]
+  });
+  equal(capability.platforms.map((platform) => platform.id).join(","), "x,xiaohongshu,douyin,wechat", "platform capability platform order");
+  equal(capability.platforms.find((platform) => platform.id === "x").sourceCount, 2, "X platform source count");
+  equal(capability.platforms.find((platform) => platform.id === "x").capabilities.comments.status, "unsupported", "X comments capability status");
+  equal(capability.platforms.find((platform) => platform.id === "xiaohongshu").capabilities.list.status, "partial", "XHS list capability status");
+  equal(capability.platforms.find((platform) => platform.id === "xiaohongshu").capabilities.transcript.status, "partial", "XHS transcript capability status");
+  const allowedCapabilityStatuses = new Set(["complete", "partial", "unsupported", "unknown"]);
+  truthy(
+    capability.platforms.every((platform) => (
+      Object.values(platform.capabilities).every((item) => allowedCapabilityStatuses.has(item.status))
+      && platform.loginBoundary
+      && platform.riskBoundary
+    )),
+    "platform capability statuses and boundaries"
+  );
+
+  const morningPipelineRun = await api(base, "/api/morning-pipeline/run", {});
+  truthy(morningPipelineRun.ok, "morning pipeline run result flag");
+  equal(morningPipelineRun.run.operations.collection.status, "skipped", "morning pipeline collection operation status");
+  equal(morningPipelineRun.collection.skipped, true, "morning pipeline disabled collection skip flag");
+  current = await state(base);
+  equal(
+    current.runtime.morningPipeline.stages.map((stage) => stage.id).join(","),
+    "drop-folder,collection,agent-results,brief,inbox,production",
+    "morning pipeline stage order"
+  );
+  equal(current.runtime.morningPipeline.stages.find((stage) => stage.id === "collection").status, "blocked", "morning pipeline collection stage status");
+  equal(current.morningPipelineRuns.length, 1, "persisted morning pipeline run count");
+  equal(
+    current.runtime.platformCapabilities.platforms.map((platform) => platform.id).join(","),
+    "x,xiaohongshu,douyin,wechat",
+    "runtime platform capability platform order"
+  );
+  pass("平台能力矩阵与一键晨间流水线按安全边界输出状态");
+
   const indexResponse = await fetch(`${base}/`);
   equal(indexResponse.status, 200, "workbench page status");
   const indexHtml = await indexResponse.text();
@@ -620,6 +909,10 @@ async function main() {
 
   const appJs = await fs.readFile(path.join(repoRoot, "app/app.js"), "utf8");
   truthy(appJs.includes("function browserCaptureToken"), "browser capture token helper");
+  truthy(
+    appJs.includes("function xhsDetailCollectorSource") && appJs.includes("browser-detail-capture") && appJs.includes("详情证据"),
+    "XHS detail evidence bookmark and renderer"
+  );
   equal((appJs.match(/data-edit-form=/g) || []).length, 3, "record edit form count");
   truthy(appJs.includes("form.dataset.editForm"), "record edit submit handler");
   truthy(
@@ -632,6 +925,10 @@ async function main() {
   truthy(
     appJs.includes("create-evidence-package") && appJs.includes("copy-evidence-path") && appJs.includes("data-evidence-form"),
     "inbox evidence package controls"
+  );
+  truthy(
+    appJs.includes('data-action="transcribe-signal"') && appJs.includes("/api/signals/transcript") && appJs.includes("逐字稿时间轴"),
+    "inbox local ASR transcript controls and timeline renderer"
   );
   truthy(
     appJs.includes("标记“证据已核对”前，请填写人工核对说明。"),
@@ -651,7 +948,72 @@ async function main() {
   truthy(appJs.includes("function renderFlowRhythm"), "information flow rhythm renderer");
   truthy(appJs.includes("function dailyPriorityQueue"), "daily priority queue renderer");
   truthy(appJs.includes("function renderWorkflowPipeline"), "workflow pipeline renderer");
+  truthy(appJs.includes('const workflowFocusStorageKey = "workbench-workflow-focus-topic"'), "workflow focus persistence key");
+  truthy(appJs.includes("function renderWorkflowFocus"), "workflow focus renderer");
+  truthy(appJs.includes("data-workflow-focus-selector"), "workflow focus selector");
+  truthy((appJs.match(/\bsetWorkflowFocusTopic\(/g) || []).length >= 6, "workflow focus assignments across data entry paths");
+  truthy(appJs.includes("function workflowGuidance"), "workflow next-action guidance");
+  truthy(
+    appJs.includes("function preferredScrollBehavior")
+      && appJs.includes('window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"'),
+    "workflow scrolling respects reduced motion"
+  );
+  truthy(
+    appJs.includes("let details = panel.closest(\"details\")")
+      && appJs.includes("details = details.parentElement?.closest(\"details\") || null"),
+    "workflow anchors recursively open nested disclosure parents"
+  );
+  truthy(appJs.includes("function workflowPipelineStageKey"), "workflow pipeline stage mapping helper");
+  const pipelineRenderer = appJs.slice(
+    appJs.indexOf("function renderWorkflowPipeline"),
+    appJs.indexOf("function renderToday")
+  );
+  truthy(
+    pipelineRenderer.includes("workflowPipelineStageKey(focusedTopic.stage)")
+      && !pipelineRenderer.includes("workflowStageGroup(focusedTopic.stage)"),
+    "workflow funnel uses stage-specific highlighting"
+  );
+  const scriptRenderer = appJs.slice(
+    appJs.indexOf("function renderProduction"),
+    appJs.indexOf("function renderPublish")
+  );
+  const publicationRenderer = appJs.slice(
+    appJs.indexOf("function renderPublish"),
+    appJs.indexOf("function renderReview")
+  );
+  const workflowReviewRenderer = appJs.slice(
+    appJs.indexOf("function renderReview"),
+    appJs.indexOf("function recentFrictionLog")
+  );
+  truthy(
+    scriptRenderer.includes('id="script-form"')
+      && scriptRenderer.includes('<input type="hidden" name="topicId"')
+      && !scriptRenderer.includes('<select name="topicId"'),
+    "script form binds hidden workflow focus without a duplicate selector"
+  );
+  truthy(
+    publicationRenderer.includes('id="publication-form"')
+      && publicationRenderer.includes('<input type="hidden" name="topicId"')
+      && !publicationRenderer.includes('<select name="topicId"'),
+    "publication form binds hidden workflow focus without a duplicate selector"
+  );
+  truthy(
+    workflowReviewRenderer.includes('id="review-form"')
+      && workflowReviewRenderer.includes('<input type="hidden" name="topicId"')
+      && !workflowReviewRenderer.includes('<select name="topicId"'),
+    "review form binds hidden workflow focus without a duplicate selector"
+  );
   truthy(appJs.includes("function renderPublishBoard"), "publish board renderer");
+  truthy(
+    appJs.includes("function renderMorningPipelineStages") && appJs.includes("function renderCapabilityMatrix"),
+    "morning pipeline and capability matrix renderers"
+  );
+  truthy(
+    appJs.includes("function scriptChangeSummary")
+      && appJs.includes('class="details script-versions" open')
+      && appJs.includes('class="script-text"'),
+    "direct script version review"
+  );
   truthy(appJs.includes("function comparePublications"), "publish queue sorting helper");
   truthy(appJs.includes("function recentFrictionLog") && appJs.includes("function renderFrictionSummary"), "three-day friction summary helper");
   truthy(appJs.includes("function viewFromLocationHash"), "primary tab deep-link helper");
@@ -674,10 +1036,27 @@ async function main() {
   );
   truthy(reviewRenderer.includes('id="friction-form"'), "review friction form placement");
   truthy(reviewRenderer.includes("${renderFrictionSummary()}"), "three-day friction summary placement");
+  truthy(
+    reviewRenderer.includes("稿件回看")
+      && reviewRenderer.includes('topic.stage === "reviewed"')
+      && reviewRenderer.includes("renderScriptVersionList(topic.id)")
+      && reviewRenderer.includes("reviewed-script-topic")
+      && reviewRenderer.includes('id="workflow-reviewed-scripts"')
+      && reviewRenderer.includes("展开正文与历史版本"),
+    "reviewed scripts remain visible in review"
+  );
   const serverJs = await fs.readFile(path.join(repoRoot, "scripts/server.mjs"), "utf8");
   truthy(serverJs.includes('from "./backup-store.mjs"'), "backup store module import");
+  truthy(serverJs.includes("process.env.DROP_SCAN_MS || 30000"), "local file scan default interval");
+  truthy(
+    serverJs.includes('"/api/signals/transcript"') && serverJs.includes("runningTranscriptSignalIds"),
+    "signal transcript API and per-signal concurrency lock"
+  );
   equal((serverJs.match(/async function createBackup/g) || []).length, 0, "server-local backup writer count");
   pass("工作台页面、信息架构、采集书签 helper、记录编辑、备份视图与备份模块边界冒烟通过");
+  pass("生产台直接展示稿件正文、字数和相对上一版变更摘要");
+  pass("已复盘选题在复盘区保留稿件正文和历史版本");
+  pass("本地投递箱和 Agent 结果扫描默认间隔收紧到 30 秒");
 
   // A persisted task lock must survive a server restart and prevent duplicate detached Agent runs.
   await stopProcess(workbenchProcess);
@@ -692,7 +1071,7 @@ async function main() {
     acquiredAt: new Date().toISOString()
   }), "utf8");
   await fs.writeFile(dataFile, JSON.stringify(diskState, null, 2), "utf8");
-  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir);
+  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir, transcriptDir);
   await waitForServer(base);
   let restartedState = null;
   for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -709,7 +1088,7 @@ async function main() {
     pid: 999999,
     acquiredAt: new Date().toISOString()
   }), "utf8");
-  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir);
+  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir, transcriptDir);
   await waitForServer(base);
   for (let attempt = 0; attempt < 30; attempt += 1) {
     restartedState = await state(base);

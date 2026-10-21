@@ -1,7 +1,7 @@
 # Evidence Package Standard
 
-- 版本：v0.1
-- 日期：2026-10-20
+- 版本：v0.2
+- 日期：2026-10-21
 - 适用对象：高价值信号、热评和后续需要进入口播稿的引用证据
 
 ## 目标
@@ -21,10 +21,13 @@ evidence/
       snapshot.json        # 有采集运行快照时存在
     candidate/
       excerpt.md
+      transcript.md         # 有已捕获逐字稿时存在
     media-manifest.json
 ```
 
-`meta.json` 是唯一入口，记录证据 ID、信号 ID、来源、采集运行、原始快照、覆盖范围、候选摘录、媒体清单、文件哈希和人工核对状态。`raw/signal.json` 保存结构化信号；`raw/snapshot.json` 保存采集入口留下的原始快照；`candidate/excerpt.md` 是待核对工作稿，不是事实陈述。
+`meta.json` 是唯一入口，记录证据 ID、信号 ID、来源、采集运行、原始快照、覆盖范围、候选摘录、逐字稿元数据、媒体清单、文件哈希和人工核对状态。`raw/signal.json` 保存结构化信号；`raw/snapshot.json` 保存采集入口留下的原始快照；`candidate/excerpt.md` 是待核对工作稿，不是事实陈述。
+
+`candidate/transcript.md` 只在 `transcriptStatus=captured` 且存在非空全文时生成，内容包含 ASR 全文、时间轴、模型、时长、片段数和本地 artifact 路径。`meta.json` 的 `transcript.reviewRequired` 必须为 `true`；ASR 同音字、标点和术语错误不能被自动标记为已核实事实。转写失败时保留 `failed` 运行记录，不生成空 transcript，也不能覆盖已捕获全文。
 
 ## 核对状态
 
@@ -43,6 +46,7 @@ evidence/
 3. 媒体第一版只记录 manifest，不自动下载；后续下载必须按 URL 和 checksum 幂等补齐。
 4. 缺少 `raw/snapshot.json` 时，`meta.json` 和主数据索引会显式标记 `missingLayers: ["raw-snapshot"]`。
 5. Agent 输出只能进入 candidate 层，不能直接修改 verification 状态。
+6. 逐字稿媒体下载必须由用户在单条信号上显式触发；只选择完整 MP4，不下载 `.m4s` 分片，不批量转写。
 
 ## 当前 API
 
