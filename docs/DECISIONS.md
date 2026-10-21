@@ -75,3 +75,9 @@
 - **做了什么**：`work/ui-verify.mjs`、`work/ui-fixtures.mjs` 继续作为本地验收工具，不声称已进仓库；`work/` 和 `handoff/` 仍不进入 Git。`npm run build:ui` 先清空 `app/dist`，再由 Vite 生成当前资源并回填 `capture-bridge.html`，避免多轮 hash 文件堆积。
 - **为什么**：本地验收工具依赖本机 Chromium 与现有 fixtures，直接公开会把未锁定依赖伪装成可复现测试；而稳定产物目录比测试脚本位置更直接影响运行和发布。
 - **放弃了什么**：放弃“验证脚本已随代码进仓库”的错误表述，也放弃用 `emptyOutDir: false` 保留历史构建文件的旧做法。
+
+## D-013 2026-10-22 · 本地 main 与 GitHub main 是唯一源码，临时分支必须通过机器门槛合入
+
+- **做了什么**：定义 `D:\personal-content-workbench` 的 `main` 与 GitHub `origin/main` 为唯一最终源码；Agent 使用临时分支或仓库外 worktree，集成者按分支顺序合并并在推送后执行 `npm run verify:source`。门槛检查脏 worktree、stash、冲突标记、worktree / 分支未合并提交，以及本地、`origin/main`、GitHub 实时 `main` 的 SHA 一致性。
+- **为什么**：多 Agent、多 runtime 并行时，最终风险不是单个提交本身，而是代码留在未合并分支、另一个 worktree、stash 或本地未推送提交中。口头交接无法可靠证明最终源码，必须让“本地与 GitHub 同一主线”成为可执行验收条件。
+- **放弃了什么**：放弃各 Agent 各自维护长期副本、直接写 `main`、依靠人工记忆合并分支，以及用强制推送或整文件覆盖制造“表面无冲突”的做法。

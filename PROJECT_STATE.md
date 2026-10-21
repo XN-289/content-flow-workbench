@@ -20,6 +20,7 @@ Current phase: release hardening
 - 平台能力矩阵和晨间流水线编排器已实现并通过临时数据回归：四平台列表 / 详情 / 评论 / 正文 / 媒体能力只用 `complete / partial / unsupported / unknown` 表达，登录与风险边界显式展示；一键流水线按投递箱、到期采集、Agent 结果、晨报、Inbox、生产块顺序编排，自动化关闭时采集段标记 blocked / skipped 且不伪装成功 — `scripts/platform-capabilities.mjs`、`scripts/morning-pipeline.mjs`、`scripts/chain-regression.mjs`
 - 成品前端已收敛为 React 19 + TypeScript + Vite 单端口运行：`scripts/server.mjs` 在 5177 同时托管 `app/dist` 与 `/api/**`，`/`、`/flow`、`/workflow`、`/system` 支持刷新、深链和浏览器前进后退；构建先清空 `app/dist`，再回填 capture bridge，不再累积历史 hash 目录 — `web/src/**`、`scripts/build-ui.mjs`、`scripts/server.mjs`、`docs/FRONTEND_ARCHITECTURE.md`
 - 晨间流水线状态一致性和写入边界已修复：运行记录先落 `running`，失败、阻塞、待处理、待人工、运行中、跳过、完成按固定优先级聚合；`manual` 与 `browser-assisted` 源不会被后台调度器自动执行，`/api/update type=settings` 严格限制为 `inboxTime`、`inboxDailyLimit` — `scripts/morning-pipeline.mjs`、`scripts/server.mjs`、`scripts/backend-pipeline-regression.mjs`
+- 单一源码与多 Agent 协作已固化：本地 `main` 工作区和 GitHub `origin/main` 是唯一最终源码；临时分支 / worktree 必须合入，`npm run verify:source` 会阻断脏 worktree、stash、冲突标记、未合并分支及本地 / 远端 SHA 分叉 — `docs/AGENT_COORDINATION.md`、`scripts/verify-source-of-truth.mjs`
 - 复盘保存已改为事务：复盘记录与选题推进到 `reviewed` 同成同败，写入失败时不留下半条记录；专项后端口径回归和 32/32 主链路回归均通过 — `scripts/server.mjs`、`scripts/backend-pipeline-regression.mjs`
 - 用户提供的 4 条小红书可读详情均完成真实游客态采集：每条均有正文、封面、媒体清单、raw snapshot 和证据包，初始页面逐字稿均标记为 missing，访问过程中未遇到人机验证；公开文档只保留匿名化后的方法与验收结论 — `docs/xhs-collection-research.md`、`docs/platform-capabilities.md`
 - 4 条真实信号完成本地 ASR 验收：每次显式选择一个完整视频、拒绝分段媒体，经 ffmpeg 与 faster-whisper small int8 CPU 生成 `captured` 候选稿；4 个证据包均含正文候选、时间轴和 SHA-256 清单，哈希重算匹配，证据状态保持 `unverified` — `scripts/transcribe-signal.mjs`、`scripts/transcribe_audio.py`、`scripts/evidence-package.mjs`
@@ -229,6 +230,8 @@ Current phase: release hardening
 - 已知坑：中文文本必须用 Node UTF-8 或显式 UTF-8 安全方式读取；Windows OCR 需要通过 `powershell.exe -File ...batch-ocr.ps1` 运行；新克隆没有真实主数据，需要从私人备份恢复或重新导入；真实备份不进入 Git
 
 ## 最近更新
+
+- 2026-10-22 — 固化单一源码与多 Agent 合并门槛 — `D:\personal-content-workbench` 的 `main` 与 GitHub `main` 成为唯一最终源码；新增分支 / worktree 边界、集成者职责和冲突热点规则；`npm run verify:source` 在交接前检查脏文件、stash、worktree HEAD、本地和远端未合并分支、冲突标记以及三处主线 SHA
 
 - 2026-10-22 — 完成 React 单端口发布加固与前后端一致性验收 — React UI 已接管 `/`、`/flow`、`/workflow`、`/system` 深链；流水线先写 running 再逐段更新，聚合优先级、人工 / 自动采集边界、settings 白名单与复盘事务均进入回归；`npm run test:chain` 32/32、独立后端流水线回归、TypeScript、语法检查、三场景异常态与 6 视口 × 4 工作域 Playwright 全部通过；安全扫描复用完整边界结果并确认 Git 跟踪面与历史未报告候选；当前服务仍以 `AUTOMATION_ENABLED=false` 运行
 

@@ -22,14 +22,15 @@ npm start
 ## 1. 必读顺序（不要跳）
 
 1. `AGENTS.md`（本文件）——怎么工作。
-2. `docs/DESIGN.md` ——视觉与交互契约，**改 UI 前必读**。
-3. `web/src/styles/tokens.css` 与 `docs/design-tokens.css` ——运行时 token 与文档镜像，两处必须同步。
-4. `docs/UI_RUNTIME.md` ——当前构建、单端口运行和开发模式。
-5. `docs/FRONTEND_ARCHITECTURE.md` ——React 代码结构、状态与静态托管边界。
-6. `handoff/UI_AUDIT.md`、`handoff/FRONTEND_CONTEXT.md`、`handoff/VERIFICATION_AND_RISKS.md` ——现状、数据、风险。
-7. `docs/workbench-ui-principles.md` ——业务侧不可破坏的底线。
+2. `docs/AGENT_COORDINATION.md` ——单一源码、分支边界、冲突解决与最终合并门槛。
+3. `docs/DESIGN.md` ——视觉与交互契约，**改 UI 前必读**。
+4. `web/src/styles/tokens.css` 与 `docs/design-tokens.css` ——运行时 token 与文档镜像，两处必须同步。
+5. `docs/UI_RUNTIME.md` ——当前构建、单端口运行和开发模式。
+6. `docs/FRONTEND_ARCHITECTURE.md` ——React 代码结构、状态与静态托管边界。
+7. `handoff/UI_AUDIT.md`、`handoff/FRONTEND_CONTEXT.md`、`handoff/VERIFICATION_AND_RISKS.md` ——现状、数据、风险。
+8. `docs/workbench-ui-principles.md` ——业务侧不可破坏的底线。
 
-**冲突优先级**：业务底线（数据/状态机/安全） > `docs/DESIGN.md` > `docs/FRONTEND_ARCHITECTURE.md`。具体命令与当前运行事实以根 `package.json`、相关脚本和 `docs/UI_RUNTIME.md` 为准；文档冲突时先修正文档。
+**冲突优先级**：业务底线（数据/状态机/安全） > 单一源码规则 > `docs/DESIGN.md` > `docs/FRONTEND_ARCHITECTURE.md`。具体命令与当前运行事实以根 `package.json`、相关脚本和 `docs/UI_RUNTIME.md` 为准；文档冲突时先修正文档。
 
 ## 2. 不可破坏（改 UI 也不许动）
 
@@ -68,6 +69,7 @@ npm start
 - [ ] `prefers-reduced-motion: reduce` 下没有依赖位移才能理解的状态
 - [ ] 未编辑 `app/dist` 生成文件，未在旧文件尾部追加覆盖规则
 - [ ] `docs/DECISIONS.md` 已记录
+- [ ] 发布 / 交接终态已合并所有 Agent 分支，并在推送后通过 `npm run verify:source`
 
 ## 5. 命令速查
 
@@ -77,6 +79,9 @@ npm run build:ui
 
 # 业务链路回归（32 项）
 npm run test:chain
+
+# 单一源码终态检查；要求 main 干净且已推送
+npm run verify:source
 
 # 构建与主服务语法检查
 node --check scripts/build-ui.mjs
@@ -103,6 +108,8 @@ Invoke-WebRequest http://127.0.0.1:5177/api/state -UseBasicParsing
 - ❌ 一次性全页重写后再补规则；应先满足 `docs/DESIGN.md` 与六态定义。
 - ❌ 修改 UI 断言去迁就旧 class 名；应按角色、文案和可见行为断言。
 - ❌ 关闭自动化开关后忘记按用户意图恢复。
+- ❌ 在独立 worktree、未合并分支或 stash 中留下“已完成”的代码后宣称交付。
+- ❌ 两个 Agent 同时写同一 worktree，或用强制推送、整文件覆盖解决协作冲突。
 
 ## 7. 交接给下一任时的最小交付
 
@@ -110,4 +117,5 @@ Invoke-WebRequest http://127.0.0.1:5177/api/state -UseBasicParsing
 2. 四工作域 + 三视口 + 暗色截图。
 3. `npm run test:chain` 结果与单端口 HTTP 检查结果。
 4. `docs/DECISIONS.md` 新增条目。
-5. 仍未完成项与已知风险，明确写出来。
+5. 最终提交 SHA、已合入分支、`npm run verify:source` 结果。
+6. 仍未完成项与已知风险，明确写出来。

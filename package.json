@@ -8,6 +8,7 @@
     "build:ui": "node scripts/build-ui.mjs",
     "collect": "node scripts/collect-all.mjs",
     "test:chain": "node scripts/chain-regression.mjs",
+    "verify:source": "node scripts/verify-source-of-truth.mjs",
     "setup-task": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-startup-task.ps1 -StartNow",
     "remove-task": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-startup-task.ps1 -Uninstall"
   }

@@ -112,6 +112,7 @@ npm run remove-task
 | 需要什么 | 看哪里 |
 | --- | --- |
 | 当前状态、事实、未决问题 | [PROJECT_STATE.md](PROJECT_STATE.md) |
+| 单一源码与多 Agent 合并规则 | [docs/AGENT_COORDINATION.md](docs/AGENT_COORDINATION.md) |
 | 阶段待办和下一个行动 | [TODO.md](TODO.md) |
 | 总体方案和版本计划 | [PLAN.md](PLAN.md) |
 | North Star 生产线 | [docs/north-star-roadmap.md](docs/north-star-roadmap.md) |
@@ -136,7 +137,8 @@ node --check scripts/collect-all.mjs
 node --check app/app.js
 node -e "JSON.parse(require('fs').readFileSync('data/import-template.json','utf8')); console.log('JSON OK')"
 npm run test:chain
+npm run verify:source
 npm start
 ```
 
-启动后确认首页和 `/api/state` 都返回 200。`npm run test:chain` 会创建临时数据文件、投递箱、Agent 目录、Drive mock 目录、备份目录和 mock RSS 服务，不读取或修改真实主数据。
+启动后确认首页和 `/api/state` 都返回 200。`npm run test:chain` 会创建临时数据文件、投递箱、Agent 目录、Drive mock 目录、备份目录和 mock RSS 服务，不读取或修改真实主数据。`npm run verify:source` 用于最终发布或交接，要求当前是干净的 `main`，所有 Agent 分支和 worktree 已合并，并验证本地、`origin/main` 与 GitHub 实时主线为同一个 SHA。

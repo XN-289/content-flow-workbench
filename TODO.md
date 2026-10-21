@@ -151,6 +151,8 @@
 - [x] 晨间流水线先持久化 `running` 再逐段更新，并按 `failed > blocked > pending > attention > running > skipped > ok` 聚合；独立后端回归覆盖状态、事务和失败路径。
 - [x] 后台自动调度只执行 `public-rss`、`public-page`，`manual` 与 `browser-assisted` 只进入人工队列；settings 更新限制为 `inboxTime`、`inboxDailyLimit`，复盘记录与 `reviewed` 推进使用事务。
 - [x] 发布前按完整边界执行安全扫描：Git 跟踪面与历史未报告候选；本地日志和忽略文件中的候选按暴露面单独记录，不宣称绝对无风险。
+- [x] 建立本地 `main` 与 GitHub `main` 的单一源码规则：临时 Agent 分支必须在集成前合入，额外 worktree、stash 和未推送提交不得伪装成交付。
+- [x] 增加 `npm run verify:source` 终态门槛：检查脏 worktree、stash、未解决冲突、未合并分支、worktree HEAD 和本地 / GitHub 主线 SHA。
 - [x] 提供工作台内备份列表和恢复入口。
 - [x] 建立备份模块护栏：备份读写、哈希去重、保留策略和格式校验进入 `scripts/backup-store.mjs`，`server.mjs` 保留恢复编排；链路回归通过。
 - [ ] 建立模块化护栏：采集结果信封、证据包、Agent 桥接等新逻辑进入独立 `scripts/*.mjs` 模块，`server.mjs` 只保留路由、组合和轻量适配；每次拆分后保持链路回归通过。
