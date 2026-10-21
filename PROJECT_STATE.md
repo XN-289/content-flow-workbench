@@ -1,18 +1,37 @@
 # PROJECT_STATE
 
-Updated: 2026-10-20 15:35
-Current phase: implementation
+Updated: 2026-10-22
+Current phase: release hardening
 
 ## 一句话现状
 
-已完成 Park 原型分析、North Star 路线图和第一版本地 MVP：工作台可通过 `npm start` 在本机运行，主导航只保留总览 / 信息流 / 工作流 / 系统四个大类 tab，大类内连续排列模块且不设二级 tab；最终形态已确认为 Windows 单用户本地桌面应用，当前 localhost 服务只是先跑通真实流程的运行壳。服务端已内置轻量自动调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面自动解析、正文全文 / 图片描述 / 数据口径候选抽取、多层身份去重、自动去重分级、每日晨报，以及 Grok / Muse / Codex / Claude / Cursor 的 Agent 任务包与结果回流；signal / material / topic 已提供页面内轻量编辑表单，主数据支持变更前自动备份、内容哈希去重、保留 100 份、显式恢复、静态路径边界、请求体上限和更新字段白名单。备份存储已拆入独立模块，`server.mjs` 只保留恢复编排和服务组合。总览页并列提供今日动作、快速粘贴和生产焦点，信息流连续排列对标账号、Inbox 和素材，工作流连续排列选题、生产、发布和复盘，系统连续排列采集、Agent 和备份；Inbox 已提供清零漏斗、来源级推进率和未看计数。端到端链路已完成 4 视角对抗审查和 20 项临时数据回归，选题状态机、发布门槛、对象身份、Agent 任务锁、结果原子写入、备份恢复和分层证据包均已收紧。对标账号支持分享文案快速登记、可见范围重复采集去重和覆盖率留痕，重复登记不会重置已采集进度。外部项目调研已扩展到采集控制面、收藏归档、媒体下载、Agent 浏览器和平台特定导出方案；采集指挥中心、统一采集结果信封和第一版分层证据包已实现，Inbox 可生成、重建、复制和人工核对证据包。Google Drive 第一版通过桌面同步目录显式镜像，不做 OAuth。第一个真实小红书对标账号已入库，8 条笔记进入 Inbox，作者互动中位数和信号相对倍数已支持自动计算。仓库已补齐 README、TODO 和交接上下文，真实账号明细、素材、备份与 Agent 任务内容只保存在本地或用户显式选择的同步目录。
+已完成 Park 原型分析、North Star 路线图和本地工作台 MVP。当前成品由 React 19 + TypeScript + Vite 构建，`scripts/server.mjs` 在 5177 单端口同时托管 `app/dist` 与 `/api/**`；总览、信息流、工作流、系统分别使用 `/`、`/flow`、`/workflow`、`/system` 路径并支持刷新、深链和前进后退。服务端包含轻量调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面解析、多层身份去重、每日晨报、Agent 任务包与结果回流；采集指挥中心、统一结果信封、四平台能力矩阵、声明式能力边界、分层证据包和六段晨间流水线均已接入。主数据继续只保存在本机，真实账号、笔记、评论、媒体、证据、逐字稿和任务内容不进入 Git。
 
-本轮参考 Postiz、Mixpost 和 LangChain social-media-agent 后，工作台从“表单优先”转向“行动优先”：总览提供每日优先队列和 3 条作品目标进度，信息流提供节奏条，工作流提供阶段漏斗，发布台账提供平台队列；hash 返回 / 前进路由与系统页移动端横向溢出已修复。
+本轮参考 Postiz、Mixpost 和 LangChain social-media-agent 后，工作台从“表单优先”转向“行动优先”：总览提供每日优先队列和 3 条作品目标进度，信息流提供节奏条，工作流提供阶段漏斗，发布台账提供平台队列；hash 返回 / 前进路由与系统页移动端横向溢出已修复。总览已可一键运行晨间流水线，信息流已展示四平台安全能力矩阵。工作流进一步收敛为“当前选题主卡 → 阶段漏斗 → 制作与审核 / 发布 / 复盘三个折叠区 → 选题库与全局台账折叠区”：制作和发布默认收起，复盘默认展开，复盘内“稿件回看”再用二级折叠隐藏两版正文；阶段跳转会自动递归展开父级折叠区。桌面 1440×1000 页面高度从 5,248px 降到 3,202px，390×844 手机从 8,191px 降到 4,496px，375×812 小手机从 8,191px 降到 4,586px。第一条真实信号已完成到两版口播稿、三平台本地演练台账、复盘和摩擦记录的完整本地闭环；这轮未进行真实公开平台发布。
+
+2026-10-21 当前主数据有 7 个真实小红书对标账号、12 条信号和 4 条真实游客态详情证据包。用户提供的 4 条可读详情均完成正文、封面、媒体清单、raw snapshot、证据包和哈希校验，并经逐条显式本地 ASR 得到 1,995 / 1,456 / 1,665 / 894 字候选逐字稿，共 387 段，全部保持 `unverified`。4 个对应作者主页均完成游客态 blocked 快照：首屏各 12 条可见但全部缺少 noteId，Inbox 新增 0。游客态搜索字段和搜索结果 URL 也已验证为登录限制，不能反查 blocked 标题。平台能力矩阵在当前 7 个小红书源上校验通过；4 条逐字稿证据重建后通过总览页运行晨间流水线 `morning-pipeline-2026-10-21-01afef91`，HTTP 200、`ok: true` 和完整六段状态，其中 Inbox 为待处理超限的 `attention`，不是运行失败。
+
+2026-10-22 的发布加固已完成：晨间流水线先持久化 `running`，再逐段更新；六段聚合优先级固定为 `failed > blocked > pending > attention > running > skipped > ok`。后台自动调度只执行 `public-rss`、`public-page`，`manual`、`browser-assisted` 只进入人工队列；复盘保存改为事务，设置更新只允许 `inboxTime`、`inboxDailyLimit`。
 
 ## 已接受事实
 
 - 外部自动化调研完成：下一阶段优先补采集指挥中心、统一采集结果信封、平台能力矩阵、快照差异和轻量 doctor，不引入更激进的平台抓取器 — `docs/external-automation-research.md`
 - 统一采集结果信封已实现并通过临时数据回归：公开采集、浏览器辅助、本地投递箱和快速粘贴的运行记录均输出 `found / created / duplicates / blocked / failed / coverage / nextAction / cursor / error`，旧扁平字段保留兼容 — `scripts/collection-envelope.mjs`、`docs/collection-envelope.md`、`scripts/chain-regression.mjs`
+- 平台能力矩阵和晨间流水线编排器已实现并通过临时数据回归：四平台列表 / 详情 / 评论 / 正文 / 媒体能力只用 `complete / partial / unsupported / unknown` 表达，登录与风险边界显式展示；一键流水线按投递箱、到期采集、Agent 结果、晨报、Inbox、生产块顺序编排，自动化关闭时采集段标记 blocked / skipped 且不伪装成功 — `scripts/platform-capabilities.mjs`、`scripts/morning-pipeline.mjs`、`scripts/chain-regression.mjs`
+- 成品前端已收敛为 React 19 + TypeScript + Vite 单端口运行：`scripts/server.mjs` 在 5177 同时托管 `app/dist` 与 `/api/**`，`/`、`/flow`、`/workflow`、`/system` 支持刷新、深链和浏览器前进后退；构建先清空 `app/dist`，再回填 capture bridge，不再累积历史 hash 目录 — `web/src/**`、`scripts/build-ui.mjs`、`scripts/server.mjs`、`docs/FRONTEND_ARCHITECTURE.md`
+- 晨间流水线状态一致性和写入边界已修复：运行记录先落 `running`，失败、阻塞、待处理、待人工、运行中、跳过、完成按固定优先级聚合；`manual` 与 `browser-assisted` 源不会被后台调度器自动执行，`/api/update type=settings` 严格限制为 `inboxTime`、`inboxDailyLimit` — `scripts/morning-pipeline.mjs`、`scripts/server.mjs`、`scripts/backend-pipeline-regression.mjs`
+- 复盘保存已改为事务：复盘记录与选题推进到 `reviewed` 同成同败，写入失败时不留下半条记录；专项后端口径回归和 32/32 主链路回归均通过 — `scripts/server.mjs`、`scripts/backend-pipeline-regression.mjs`
+- 用户提供的 4 条小红书可读详情均完成真实游客态采集：每条均有正文、封面、媒体清单、raw snapshot 和证据包，初始页面逐字稿均标记为 missing，访问过程中未遇到人机验证；公开文档只保留匿名化后的方法与验收结论 — `docs/xhs-collection-research.md`、`docs/platform-capabilities.md`
+- 4 条真实信号完成本地 ASR 验收：每次显式选择一个完整视频、拒绝分段媒体，经 ffmpeg 与 faster-whisper small int8 CPU 生成 `captured` 候选稿；4 个证据包均含正文候选、时间轴和 SHA-256 清单，哈希重算匹配，证据状态保持 `unverified` — `scripts/transcribe-signal.mjs`、`scripts/transcribe_audio.py`、`scripts/evidence-package.mjs`
+- Chrome 155 的 Private Network Access 拦截已通过本地 bridge 解决：小红书详情书签向受约束的 `app/capture-bridge.html` 发送 `postMessage`，bridge 在本地源内调用工作台 API；未关闭浏览器安全开关，未使用用户登录态 — `app/capture-bridge.html`、`app/app.js`、`scripts/server.mjs`
+- 4 个新增作者主页在真实 Chrome Guest 中验证为游客态 blocked：每个首屏均可见 12 条、缺少可用 noteId、Inbox 新增 0；均保存 raw snapshot 并标记 `identityStatus=note-id-unavailable`，未遇到人机验证。继续滚动不能解决首屏 ID 缺失，需要从 App 分享具体笔记后再用详情书签补证据 — `docs/xhs-collection-research.md`
+- 小红书游客态搜索反查已验证受限：首页搜索字段无法进入结果路由，直接打开搜索结果也停留在登录限制，状态和 DOM 均无笔记候选；该路径不能遍历 blocked 标题，也不能绕过登录墙 — `docs/xhs-collection-research.md`
+- 第一条匿名化样本已完成本地内容闭环：证据包人工核对、直接生产、两版口播稿、七项生产检查、四个人工关卡、三平台本地演练台账、复盘和 5 条摩擦记录均已落库，最终选题阶段为 `reviewed`；三平台记录均为本地演练，公开曝光 / 互动 / 评论均不虚构。
+- 小红书详情证据书签已完成真实游客态 blocked 闭环：目标笔记游客列表可见标题和当前会话 token，但卡片链接为空且详情跳转 `300017 安全限制 / 访问链接异常`；在真实 Chrome Guest 页面执行工作台生成的书签后，CORS、capture token、本地 API、raw snapshot 和 signal 回填全部打通，正文、封面、媒体为空且 `transcriptStatus=blocked`，未伪造内容。成功采集时会把可用详情 URL 回写 `signal.url`，blocked 重定向不覆盖旧链接 — `scripts/detail-evidence.mjs`、`scripts/server.mjs`、`app/app.js`、`scripts/chain-regression.mjs`
+- 小红书短链快速登记已按真实分享链接修复并验证：`xhslink.cn` 使用 GET，从登录重定向的 `redirectPath` 还原无参数 profile URL，只接受主页路径；重复登记只更新粉丝 / 赞藏元数据，不重置既有覆盖率 — `scripts/source-intake.mjs`、`scripts/chain-regression.mjs`
+- 用户提供的两个小红书账号分享入口均幂等登记为原有源，只更新账号级指标，不重置既有覆盖率；两次登记均未新增重复源，当前主数据共有 7 个源。账号级明细只保存在本机 — 本轮 `/api/state` 与浏览器验收
+- 对标候选调研已完成证据分级：Brave 宽泛搜索 142 条、去重 99 个主页；10 个候选直接打开均为普通登录墙，未出现安全验证、滑块或异常流量；仅搜索摘要候选不写入生产主数据 — `docs/benchmark-blogger-candidates.md`
+- 总览和信息流已完成真实浏览器只读验证：晨间流水线六段可见，四平台能力矩阵可见，账号页显示 7 个源、粉丝 37000 与赞藏 22000，1440 / 390 视口无横向溢出 — 本轮 Playwright 验证与截图输出
 - 补充外部调研完成：ArchiveBox、Karakeep、linkding、SingleFile、yt-dlp、gallery-dl、Playwright / Playwright MCP、browser-use 及抖音、公众号、X 平台特定项目已纳入对比；可吸收的是分层证据包、幂等媒体归档、能力声明和可见范围导出，不吸收登录态批量抓取、身份池、代理、指纹伪装或验证码处理 — `docs/external-automation-research.md`
 - 第一版分层证据包已实现并通过临时数据回归：支持 `meta.json`、raw signal / snapshot、candidate excerpt、media manifest、SHA-256 清单、缺层标记、重复生成保留人工核对结论；真实证据保存在本地 `evidence/` 且不进 Git — `scripts/evidence-package.mjs`、`docs/evidence-package.md`、`scripts/chain-regression.mjs`
 - 当天 X 搜索 `from:xparkzz filter:videos` 可见 3 条相关视频，已分别下载、抽帧、OCR 并交叉分析 — `docs/park-prototype-analysis.md`
@@ -29,7 +48,8 @@ Current phase: implementation
 - 用户确认最终对标是最初 Park 视频中的事件驱动工作台和动画生产线 — `decisions.md`、`docs/north-star-roadmap.md`
 - 用户确认自动采集是长期主线：账号进入系统后应逐步实现每日检查、快照留痕、信号和素材候选生成，人只做分流判断 — `decisions.md`
 - 项目已初始化本地 Git 主分支 `main`，远端为 `https://github.com/XN-289/content-flow-workbench.git`；真实主数据 `data/workbench.json` 已加入 `.gitignore`，不进入版本历史
-- 发布前安全扫描未在项目文件和 Git 历史中发现疑似密钥；29 个唯一疑似值仅存在于 Codex 本地会话日志，不属于 GitHub 交付面
+- 早期发布前安全扫描记录：项目文件和 Git 历史未发现疑似密钥；29 个唯一疑似值仅存在于 Codex 本地会话日志，不属于 GitHub 交付面
+- 2026-10-22 完整边界重扫记录：36 个唯一候选，其中 33 个仅存在于 Codex 本地会话日志，3 个仅存在于被 `.gitignore` 排除的 `.tmp/` 浏览器 profile 和旧 `app/ui-*` 构建；扫描器未报告当前被跟踪文件或 Git 历史中的候选。该结论不等于“绝对无风险” — `secret-perimeter-guard` 扫描结果
 - 第一个真实对标账号为小红书账号；昵称、主页、笔记链接和采集参数只保存在 `data/workbench.json`
 - 对标账号快速登记和可见范围覆盖率已通过临时数据回归：首次采集、重复采集去重、补齐到 complete、重复登记保留覆盖率均通过 — `scripts/chain-regression.mjs` 16 项结果
 - 浏览器辅助采集第一批可见笔记 8 条已入库，最高互动 `5.9万` 已解析为 `59000` — `data/workbench.json`
@@ -123,20 +143,42 @@ Current phase: implementation
 - 工作台行动优先体验 — `app/app.js`、`app/styles.css`、`docs/workbench-ux-research.md`、`scripts/chain-regression.mjs` — 总览提供现在 / 接着 / 稍后行动队列与作品目标进度，行动队列可直接跳转对应模块；信息流提供进料 / Inbox / 素材节奏，工作流提供阶段漏斗和近 3 天摩擦摘要，发布台账提供平台队列；大类 hash 重渲染、浏览器返回 / 前进、系统页移动端溢出修复和模块位置进入回归；`node --check`、`npm run test:chain` 18 项、`git diff --check` 和桌面 / 390px 四视图 Playwright 检查通过
 - UI 设计原则与验收门槛 — `docs/workbench-ui-principles.md` — 固化四个大类 tab、行动优先、显式状态控件、明暗三态、可访问性、响应式、Apple 式视觉语言和 UI 交付前清单；以后界面改动先过该清单再提交
 - 分层证据包 — `scripts/evidence-package.mjs`、`scripts/server.mjs`、`app/app.js`、`app/styles.css`、`scripts/chain-regression.mjs` — Inbox 支持生成 / 重建证据包、复制本地目录和人工核对；标记已核对必须填写说明，错误显示在说明字段旁并回焦输入框；`meta.json`、原始信号 / 快照、候选摘录、媒体清单和 SHA-256 进入隔离目录验证，`node --check`、`npm run test:chain` 19 项回归、1440 / 390 无横向溢出、44px 触控和明暗检查通过
+- 平台能力矩阵 — `scripts/platform-capabilities.mjs`、`app/app.js`、`app/styles.css`、`docs/platform-capabilities.md`、`scripts/chain-regression.mjs` — X / 小红书 / 抖音 / 公众号的六类能力、来源数、登录与风险边界进入信息流页；非法状态会抛错，`unknown` 不升级为完整支持；模块枚举、状态口径和边界断言通过，2026-10-21 当前态 4 平台 × 6 维度全部合法
+- 晨间流水线编排器 — `scripts/morning-pipeline.mjs`、`scripts/server.mjs`、`app/app.js`、`app/styles.css`、`docs/local-input-workflow.md`、`scripts/chain-regression.mjs` — 总览展示六段可点击状态并支持一键顺序执行投递箱扫描、到期采集、Agent 结果回流和晨报刷新；运行记录保留最近 30 条，自动化禁用时明确 blocked / skipped；`node --check`、`npm run test:chain` 22 项回归、5177 页面验证、1440 / 390 布局尺寸检查通过
+- 小红书短链与账号元数据 — `scripts/source-intake.mjs`、`scripts/server.mjs`、`app/app.js`、`data/import-template.json`、`docs/benchmark-blogger-candidates.md`、`scripts/chain-regression.mjs` — 分享文案解析支持粉丝数与赞藏数，短链通过登录重定向还原稳定 profile URL，重复登记保持幂等；真实源 3 个、信号 8 条，`node --check`、JSON 解析、22 项链路回归和真实页面 Playwright 验证通过
+- 小红书详情证据成功链路 — `app/capture-bridge.html`、`scripts/detail-evidence.mjs`、`scripts/server.mjs`、`app/app.js`、`scripts/evidence-package.mjs` — 4 条用户提供的真实详情页完成游客态采集、URL 回写、raw snapshot、证据包与哈希校验；逐字稿缺失显式落为 missing，媒体仅保留清单不默认下载
+- 单条信号本地 ASR 逐字稿 — `scripts/transcribe-signal.mjs`、`scripts/transcribe_audio.py`、`scripts/server.mjs`、`app/app.js`、`scripts/evidence-package.mjs`、`scripts/chain-regression.mjs` — 只允许用户显式触发，选择小红书 CDN 的完整 MP4，拒绝 `.m4s` 分片和批处理；本地 faster-whisper 输出全文、片段和运行记录，失败不覆盖已捕获文本；证据包新增 candidate transcript 层并保留人工校对边界，28 项链路回归通过，4 条真实信号均已完成页面点击、证据重建和哈希校验
+- 小红书主页 blocked 快照链路 — `app/capture-bridge.html`、`app/app.js`、`scripts/server.mjs`、`scripts/chain-regression.mjs` — 主页书签读取 Vue ref 解包后的页面状态，保存标题、互动、时间、封面、主页总数和作者元数据；可见卡片缺少 noteId 时进入 `blockedItems`，运行状态和 coverage 均为 blocked，不伪造 URL 或 Inbox 记录；12 条缺 ID 回归场景与完整链路 25 项全部通过，4 个真实作者主页完成 Guest 验证
+- 本地内容闭环与移动端工作流修复 — `app/app.js`、`scripts/server.mjs`、`app/styles.css`、`scripts/chain-regression.mjs` — 直接生产跳转生产台，稿件保存只在 outline 首版推进 draft，review → ready 强制七项检查，三平台发布记录齐全后才推进 published，生产检查 / 关卡使用增量合并；嵌套 grid 和长标签导致的工作流 390px 横向溢出已修复；真实信号闭环 Playwright 断言全部通过
+- 稿件审阅与回看 — `app/app.js`、`app/styles.css`、`scripts/chain-regression.mjs` — 生产卡片默认展开正文，显示不计空白的字符数和相对上一版差异；复盘区从已复盘选题反向聚合稿件，复用同一版本组件，已复盘选题即使被生产台过滤也能直接审阅；31 项链路回归通过，1440 / 390 真实页面均显示两版 355 字正文、无横向溢出和控制台错误
+- 工作流结构精简与定位 — `app/app.js`、`app/styles.css`、`scripts/chain-regression.mjs`、`work/verify-workflow-optimization.cjs` — 当前选题主卡优先展示闭环状态、下一步、稿件 / 平台 / 复盘计数与关键缺口；制作、发布、选题库与全局台账默认收起，复盘保持展开，复盘正文与历史版本再二级收起；`openWorkflowPanel()` 会递归展开父级折叠区，`summary` 保持至少 44px 触控高度；31 项链路回归通过，Playwright 在 1440×1000、390×844、375×812 三视口验证无控制台 / 页面异常、无横向溢出，切换选题持久化且自动展开对应阶段，四类表单 API 拦截后数据计数保持 2 稿件 / 3 发布 / 1 复盘 / 5 摩擦；暗色实测正文 `#f5f5f7`、次级文字 `#a5a5aa`、面板 `#1c1c1e`，对比度断言通过
+- React 成品 UI 与单端口深链 — `web/src/**`、`scripts/build-ui.mjs`、`scripts/server.mjs`、`app/dist/**` — 总览、信息流、工作流、系统四域使用原生路径；SPA 回退只承接页面路由，缺失静态资源保持 404，越界路径保持 403；构建采用 `emptyOutDir: true` 并由脚本回填 `app/capture-bridge.html`
+- 流水线与服务边界加固 — `scripts/morning-pipeline.mjs`、`scripts/server.mjs`、`scripts/chain-regression.mjs`、`scripts/backend-pipeline-regression.mjs` — 运行中状态先落盘、聚合优先级固定、自动调度排除人工源、settings 字段白名单和复盘事务均已纳入回归；新增独立后端流水线回归脚本
+- 前端设计与执行契约 — `AGENTS.md`、`docs/DESIGN.md`、`docs/FRONTEND_ARCHITECTURE.md`、`docs/UI_RUNTIME.md`、`docs/design-tokens.css` — 明确 Agent 必读顺序、组件准入、token 单一来源、四域路径、单端口构建与 32 项完成定义
 
 ## 已验收
 
-- 无。当前结论仍待用户确认，不写已验收。
+- 业务链路 — `npm run test:chain` — 32/32 通过
+- 后端流水线 — `node scripts/backend-pipeline-regression.mjs` — 通过
+- 前端工程 — TypeScript 检查、`node --check scripts/build-ui.mjs`、`node --check scripts/server.mjs`、相关 `.mjs` 语法检查与 `npm run build:ui` — 通过
+- 真实数据浏览器验收 — 6 个视口 × 总览 / 信息流 / 工作流 / 系统，无控制台错误、无横向溢出和文字遮挡 — 通过
+- 异常态浏览器验收 — 空数据、最小数据、API 500 三场景 × 四工作域 — 通过
+- 单端口 HTTP 边界 — 四域深链与 `/api/state`、缺失 `/assets/**` 404、越界路径 403 — 通过
+- 状态与导航 — 中文状态映射、受阻摘要、浏览器前进后退、主题三态与移动端检查 — 通过
 
 ## 未决问题
 
-- P1 — 第一批对标账号只完成第一个，后续账号未确认 — 用户 — 不阻塞第一批信号分流和素材库建设 — 用户后续逐步提供账号
+- P1 — 直接生产后新选题仍带占位值，用户需要回找折叠编辑表单 — 实现 — 不阻塞闭环但影响首次手感 — 生产台直接暴露标题 / 核心观点 / 目标读者缺口
+- P1 — 证据包生成后核对区仍折叠，页面重渲染会重置展开状态 — 实现 — 不阻塞核对但增加寻找成本 — 生成成功后自动展开并定位
+- P1 — 本地演练没有独立 publication status，只能用 `published` 加原因说明 — 实现 — 已有明确文案兜底但语义易混淆 — 增加 `rehearsal` 状态并区分真实发布
+- P1 — 当前 7 个本地对标源中，4 个新增源为 blocked、1 个既有源为 missing、2 个源为 unknown，搜索摘要候选尚未经用户确认 — 用户 — 不阻塞本地信号分流和详情证据复核 — 用户确认候选优先级；需要补证据时提供具体笔记的 App 分享链接
 - P0 — 40 天内优先讲清楚的三个主题未确认 — 用户 — 阻塞选题池初始化 — 用户给出三个主题
 - P0 — “连续出摊”的定义未确认 — 用户 — 阻塞今日页指标 — 用户定义计数规则
 - P2 — Inbox 早上处理的具体时钟未确认 — 用户 — 可先用 09:00 默认值 — 用户确认或修改
 - P1 — X 视频发布或跳过标准未确认 — 用户 — 阻塞可选平台决策 — 用户给出边界
 - P1 — 公众号文稿是视频发布后整理还是同步准备未确认 — 用户 — 阻塞生产排期 — 用户选择节奏
-- P1 — 采集书签尚未在第一个小红书对标主页人工验证 — 用户 — 不阻塞 Inbox 已有 8 条信号分流 — 用户手动滚动后点击书签，记录可见数量和新增数量
+- P1 — 4 个新增作者主页游客态均缺 noteId，主页列表只能保存 blocked 快照，游客态搜索也被“登录后查看搜索结果”拦截，无法批量生成可打开详情链接 — 用户 / 平台边界 — 不阻塞已有 12 条信号分流和 4 条详情证据复核 — 用户对感兴趣的笔记提供 App 分享链接，再用详情书签补正文、媒体和逐字稿状态
+- P1 — 4 条 ASR 候选稿尚未人工校对 — 用户 — 不阻塞证据留存和页面展示 — 用户逐条校对同音字 / 标点 / 术语，完成前证据状态保持 `unverified`
 - P1 — 真实 Google Drive 同步目录尚未配置 — 用户 — 不阻塞本地 bridge 使用 — 用户在桥接页填写桌面同步目录
 - P1 — Codex / Claude 真实选题任务尚未运行，Grok / Muse 手动回流尚未验证 — 用户 — 不阻塞代码交付 — 用户各跑一次真实任务并记录手感
 - P2 — Cursor 的标准打开方式尚未确认 — 用户 — 可先复制任务目录手动打开 — 用户确认常用入口后再评估增强
@@ -149,10 +191,10 @@ Current phase: implementation
 
 ## 下一步
 
-1. 连续三个真实工作日从总览行动队列开始工作 — 验收标准：不需要手工翻找入口也能判断下一步动作，重复卡点记录在复盘区近 3 天摩擦摘要中
-2. 在账号页刷新采集指挥中心，用第一个小红书对标账号确认待补采状态、覆盖率、最近运行摘要和下一步动作 — 验收标准：用户能在页面直接判断下一步是否需要滚动补采
-3. 用一条真实高价值信号生成并人工核对证据包 — 验收标准：来源链接、原始快照或缺层说明、候选摘录、媒体清单和核对说明互相关联，真实证据不进 Git
-4. 用户在第一个小红书对标主页手动滚动到目标范围，点击账号页生成的采集书签 — 验证可见数量、链接和 Private Network Access 行为
+1. 连续三个真实工作日从总览行动队列和“运行流水线”开始工作 — 验收标准：一键后能看清投递箱、采集、回流、晨报、Inbox 和生产块状态，不需要手工翻找入口也能判断下一步动作，重复卡点记录在复盘区近 3 天摩擦摘要中
+2. 在账号页刷新采集指挥中心，确认 4 个新增作者的 blocked 状态、可见数量、raw snapshot 和下一步动作 — 验收标准：用户能看出继续滚动不能解决 noteId 缺失
+3. 人工校对 4 条已生成逐字稿 — 验收标准：同音字、标点和术语完成人工修正，证据核对状态按结论更新；新笔记仍走 App 分享链接 + 详情书签 + 显式 ASR
+4. 将已复盘的高敏感选题推进为真实口播视频并人工发布 — 验收标准：录制 / 剪辑完成，至少一个主平台真实链接回填，公开数据只在平台可见后记录
 5. 用户用一条真实信号和一条真实热评各投一个文件到 `drops/` — 验证本地投递箱日常手感
 6. 用户打开 `http://127.0.0.1:5177` 的 Inbox — 分流第一批信号，至少挑 2 条拆解、2 条观察
 7. 用户给出三个优先主题 — 每个主题有一句话核心观点
@@ -162,7 +204,7 @@ Current phase: implementation
 
 - 远端仓库：`https://github.com/XN-289/content-flow-workbench`
 - 入口文件：仓库根目录的 `PLAN.md`
-- 工作台启动：在仓库根目录执行 `npm start`，访问 `http://127.0.0.1:5177`
+- 工作台启动：在仓库根目录执行 `npm run build:ui`，再执行 `npm start`，访问 `http://127.0.0.1:5177`
 - 每日采集：工作台启动后执行 `npm run collect`
 - 常驻任务：`npm run setup-task` 安装当前用户登录任务，`npm run remove-task` 移除；默认不随克隆自动安装
 - 原型分析：`docs/park-prototype-analysis.md`
@@ -171,15 +213,40 @@ Current phase: implementation
 - 小红书采集调研：`docs/xhs-collection-research.md`
 - 外部自动化项目调研：`docs/external-automation-research.md`
 - 工作台体验调研：`docs/workbench-ux-research.md`
+- 设计契约：`docs/DESIGN.md`
+- 前端架构：`docs/FRONTEND_ARCHITECTURE.md`
+- UI 运行说明：`docs/UI_RUNTIME.md`
+- UI 设计决策：`docs/DECISIONS.md`
+- 平台能力矩阵：`docs/platform-capabilities.md`
+- 对标博主候选：`docs/benchmark-blogger-candidates.md`
 - UI 设计原则：`docs/workbench-ui-principles.md`
 - Agent 桥接：`docs/agent-bridge.md`
 - 待办清单：`TODO.md`
 - 导入模板：`data/import-template.json`
 - 决策文件：`decisions.md`
-- 验证命令：`node --check scripts/server.mjs`、`node --check app/app.js`、`npm run test:chain`、`npm run collect`
+- 验证命令：`npm run build:ui`、`npm run test:chain`、`node scripts/backend-pipeline-regression.mjs`、`node --check scripts/build-ui.mjs`、`node --check scripts/server.mjs`
+- 当前运行态：5177 服务以 `AUTOMATION_ENABLED=false` 运行，后台采集暂停，真实主数据未被本轮验收改写
 - 已知坑：中文文本必须用 Node UTF-8 或显式 UTF-8 安全方式读取；Windows OCR 需要通过 `powershell.exe -File ...batch-ocr.ps1` 运行；新克隆没有真实主数据，需要从私人备份恢复或重新导入；真实备份不进入 Git
 
 ## 最近更新
+
+- 2026-10-22 — 完成 React 单端口发布加固与前后端一致性验收 — React UI 已接管 `/`、`/flow`、`/workflow`、`/system` 深链；流水线先写 running 再逐段更新，聚合优先级、人工 / 自动采集边界、settings 白名单与复盘事务均进入回归；`npm run test:chain` 32/32、独立后端流水线回归、TypeScript、语法检查、三场景异常态与 6 视口 × 4 工作域 Playwright 全部通过；安全扫描复用完整边界结果并确认 Git 跟踪面与历史未报告候选；当前服务仍以 `AUTOMATION_ENABLED=false` 运行
+
+- 2026-10-21 18:03 — 完成面向下一任前端 / UI Agent 的非压缩桌面交接包 — 包内包含全部源码、未提交工作区、真实本地数据、证据与测试，并提供 `START_HERE.md`、UI 审计、前端上下文、风险边界和下一任提示词；交付副本独立通过 `node --check app/app.js` 与 31/31 链路回归，临时浏览器 profile、登录态、Cookie、缓存和日志不进入交接包；真实账号、评论、媒体和逐字稿只允许私域交接
+
+- 2026-10-21 17:31 — 精简整个工作流并完成三视口验收 — 工作流收敛为当前选题主卡、阶段漏斗、制作 / 发布 / 复盘折叠区和选题库 / 全局台账折叠区；制作与发布默认收起，复盘默认展开，稿件正文与历史版本二级收起；桌面页面高度 5,248 → 3,202px，手机 8,191 → 4,496px，小手机 8,191 → 4,586px；31/31 链路回归与 Playwright 三视口、主题对比度、表单路由拦截通过；当前选题仍为 `reviewed`，两版正文一致，口径为 355 非空白字符 / 367 原始字符，3 条发布记录仍为 `workbench://local-rehearsal/...` 本地演练；当前改动尚未提交
+
+- 2026-10-21 17:09 — 补齐稿件审阅与复盘回看 — 生产台默认展开两版正文、字数和相对差异；复盘区新增“稿件回看”，已复盘选题不再因生产台过滤而消失；链路回归扩展到 31/31，Playwright 在 1440 / 390 验证两版 355 字正文完整、无横向溢出、无控制台错误；最新晨间流水线 `morning-pipeline-2026-10-21-01afef91`；当前改动尚未提交
+
+- 2026-10-21 15:40 — 完成 4 条真实信号逐字稿与证据链 — 通过 UI 逐条触发剩余 3 条本地 ASR，得到 1,456 / 1,665 / 894 字候选稿；4 个证据包均含 candidate transcript、6 条哈希且逐项匹配，状态保持未核对；Playwright 验证 4 张卡片全文和时间轴，总览页晨间流水线 run `morning-pipeline-2026-10-21-55a01fc6` HTTP 200 且六段完整；当前改动尚未提交
+
+- 2026-10-21 14:54 — 打通单条信号本地 ASR 到证据包链路 — 匿名化真实样本生成候选逐字稿，证据包哈希全部匹配且保持未核对；证据重建后晨间流水线返回六段状态，回归与浏览器验证通过
+
+- 2026-10-21 12:36 — 验证小红书游客态搜索字段反查 — 首页搜索字段不触发搜索路由，直接搜索结果 URL 显示“登录后查看搜索结果”，状态和 DOM 均无笔记候选；确认不能用搜索遍历 blocked 标题，当前改动尚未提交
+
+- 2026-10-21 12:23 — 完成 4 个新增作者的小红书主页游客态 blocked 快照验证 — 主页书签可保存可见卡片与 raw snapshot，但首屏各 12 条均缺 noteId，Inbox 新增 0；下一步改为用户提供具体笔记 App 分享链接并用详情书签补证据；当前改动尚未提交
+
+- 2026-10-21 11:27 — 打通用户提供的 4 条小红书真实游客态详情证据链 — Chrome PNA bridge、正文 / 封面 / 媒体清单、raw snapshot、证据包与 SHA-256 校验完成；4 条逐字稿如实 missing，当前 7 源 / 12 信号，能力矩阵与晨间流水线当前态验证通过；当前改动尚未提交
 
 - 2026-10-18 18:40 — 新增 North Star 路线图和 TODO，项目计划升级到 v0.5 — 影响长期目标、数据契约、动画生产线和阶段验收
 - 2026-10-18 18:47 — 自动采集升级为长期主线，项目计划升级到 v0.6 — 新增账号注册表、采集运行、原始快照、source adapter、自动化分级和小豆芽研究边界
@@ -211,4 +278,8 @@ Current phase: implementation
 - 2026-10-20 14:11 — 固化 UI 设计原则与验收门槛 — 明确四类 tab 信息架构、显式状态控件、明暗三态、可访问性、响应式和视觉语言；后续 UI 改动必须先过清单再提交
 - 2026-10-20 15:21 — 实现第一版分层证据包并完成 UI 可访问性收紧 — 证据目录包含结构化索引、原始信号 / 快照、候选摘录、媒体清单和哈希，人工核对说明改为字段内错误；链路回归扩展到 19 项且全部通过
 - 2026-10-20 15:35 — 实现统一采集结果信封 — 公开采集、浏览器辅助、本地投递箱和快速粘贴共用运行结果契约，链路回归扩展到 20 项且全部通过
+- 2026-10-20 16:53 — 实现平台能力矩阵和晨间流水线编排器 — 总览可一键执行采集前置链路并查看六段状态，信息流显式展示四平台安全边界；链路回归扩展到 21 项且全部通过，5177 已重启并健康检查通过；当前改动尚未提交
 - 2026-10-20 14:22 — 收紧移动端顶栏密度 — 明暗切换与本地数据状态同排展示，主题按钮保持 44px 触控高度；390px 首屏不再被顶栏占掉一半
+- 2026-10-20 17:42 — 修复小红书短链幂等解析并完成博主候选调研 — 真实源增至 3 个，新增粉丝 / 赞藏元数据，候选证据分级保留；真实浏览器页面验证通过，当前改动尚未提交
+- 2026-10-20 18:17 — 完成第一条真实信号的本地内容闭环 — 证据包核对、两版口播稿、生产检查、三平台本地演练台账、复盘和摩擦记录全部落库；生产状态校验、增量勾选合并与 390px 工作流溢出修复通过 Playwright 验证；当前改动尚未提交
+- 2026-10-20 19:47 — 完成小红书详情证据书签的真实游客态 blocked 闭环 — `300017` 安全限制页可一键落库 raw snapshot 并标记逐字稿受限；成功详情 URL 回写、旧链接兼容和无关推荐内容排除进入回归，23 项链路回归与 1440 / 390 Inbox 验证通过；真实可读详情的 captured / missing 成功路径仍待用户人工打开页面后验证，当前改动尚未提交

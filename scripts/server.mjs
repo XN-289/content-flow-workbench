@@ -9,13 +9,22 @@ import { aggregateCollectionEnvelopes, collectionEnvelopeFromRun, finalizeCollec
 import { createEvidenceRuntime, createSignalEvidencePackage, verifyEvidencePackage } from "./evidence-package.mjs";
 import { mediaDescriptions, normalizeDetailCapture } from "./detail-evidence.mjs";
 import { inboxFunnelRuntime } from "./inbox-funnel.mjs";
-import { morningPipelineRuntime } from "./morning-pipeline.mjs";
+import {
+  aggregatePipelineStatus,
+  isAutomaticCollectionCandidate,
+  isAutomaticCollectionDue,
+  isManualCollectionCandidate,
+  isScheduledCollectionSource,
+  morningPipelineRuntime,
+  operationStatusFromResult
+} from "./morning-pipeline.mjs";
 import { platformCapabilityRuntime } from "./platform-capabilities.mjs";
 import { resolveSourceIntakeUrl } from "./source-intake.mjs";
 import { applyTranscriptResult, resolveAsrRuntime, transcribeSignal } from "./transcribe-signal.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appDir = path.join(root, "app");
+const distDir = path.join(appDir, "dist");
 const dataDir = path.join(root, "data");
 const dataFile = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : path.join(dataDir, "workbench.json");
 const backupDir = process.env.BACKUP_DIR
@@ -32,7 +41,6 @@ const agentBridgeOutboxDir = path.join(bridgeRoot, "outbox");
 const port = Number(process.env.PORT || 5177);
 const automationTickMs = Math.max(1000, Number(process.env.AUTOMATION_TICK_MS || 60000));
 const dropScanMs = Math.max(1000, Number(process.env.DROP_SCAN_MS || 30000));
-const automaticMethods = new Set(["public-rss", "public-page"]);
 const browserCapturePaths = new Set(["/api/browser-capture", "/api/browser-detail-capture"]);
 const dropExtensions = new Set([".json", ".md", ".txt"]);
 const runningSourceIds = new Set();
@@ -86,7 +94,15 @@ const contentTypes = {
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml"
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".map": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8"
 };
 
 async function readState() {
@@ -193,9 +209,7 @@ function failureDelay(failureCount) {
 }
 
 function isScheduledSource(source) {
-  return source.enabled !== false
-    && source.checkFrequency !== "on-demand"
-    && source.collectionMethod !== "research-only";
+  return isScheduledCollectionSource(source);
 }
 
 function prepareAutomationState(state) {
@@ -215,13 +229,13 @@ function prepareAutomationState(state) {
       source.nextRunAt = collectionSlot(state.settings.collectionTime).toISOString();
     }
     if (source.automationStatus !== "retrying") {
-      source.automationStatus = automaticMethods.has(source.collectionMethod) ? "scheduled" : "manual-required";
+      source.automationStatus = isAutomaticCollectionCandidate(source) ? "scheduled" : "manual-required";
     }
   }
 }
 
 function isDue(source, timestamp = Date.now()) {
-  return isScheduledSource(source) && Boolean(source.nextRunAt) && new Date(source.nextRunAt).getTime() <= timestamp;
+  return isAutomaticCollectionDue(source, timestamp);
 }
 
 function automationEnabled(state) {
@@ -322,7 +336,7 @@ function latestRunForSource(state, sourceId) {
 
 function sourceControlRecord(state, source, timestamp = Date.now()) {
   const latestRun = latestRunForSource(state, source.id);
-  const automatic = automaticMethods.has(source.collectionMethod);
+  const automatic = isAutomaticCollectionCandidate(source);
   const scheduled = isScheduledSource(source);
   const due = isDue(source, timestamp);
   const nextRunTime = source.nextRunAt ? new Date(source.nextRunAt).getTime() : 0;
@@ -461,7 +475,10 @@ function runtimeState(state) {
     commandCenter: commandCenterRuntime(state),
     inbox: inboxFunnelRuntime(state),
     evidencePackages: createEvidenceRuntime(state),
-    morningPipeline: morningPipelineRuntime(state, { automationEnabled: automationEnabled(state) }),
+    morningPipeline: morningPipelineRuntime(state, {
+      automationEnabled: automationEnabled(state),
+      lastRun: state.morningPipelineRuns?.[0]
+    }),
     platformCapabilities: platformCapabilityRuntime(state)
   };
 }
@@ -816,8 +833,11 @@ function buildMorningBrief(state) {
   const timestamp = new Date();
   const pending = (state.signals || []).filter((signal) => signal.disposition === "inbox");
   const topSignals = [...pending].sort(compareSignals).slice(0, 5);
-  const manualSources = (state.sources || []).filter((source) => source.automationStatus === "manual-required");
-  const retryingSources = (state.sources || []).filter((source) => source.automationStatus === "retrying");
+  const manualSources = (state.sources || []).filter((source) => isManualCollectionCandidate(source));
+  const retryingSources = (state.sources || []).filter((source) => (
+    isAutomaticCollectionCandidate(source)
+    && source.automationStatus === "retrying"
+  ));
   const nextActions = [];
 
   if (topSignals.length) nextActions.push(`先看 ${Math.min(topSignals.length, 3)} 条优先信号`);
@@ -1111,7 +1131,7 @@ async function runCollection(state, sourceId, trigger = "manual") {
   finalizeCollectionRun(run);
   state.collectionRuns.unshift(run);
   source.automationStatus = isScheduledSource(source)
-    ? (automaticMethods.has(source.collectionMethod) ? "running" : "manual-required")
+    ? (isAutomaticCollectionCandidate(source) ? "running" : "manual-required")
     : "on-demand";
 
   try {
@@ -1290,7 +1310,10 @@ async function runAutomationTick(force = false) {
       return { ok: true, skipped: true, reason: "automation is disabled" };
     }
 
-    const candidates = state.sources.filter((source) => (force ? isScheduledSource(source) : isDue(source)));
+    const candidates = state.sources.filter((source) => (
+      isAutomaticCollectionCandidate(source)
+      && (force || isAutomaticCollectionDue(source))
+    ));
     const results = [];
     const runs = [];
     for (const source of candidates) {
@@ -2610,7 +2633,16 @@ async function scanAgentTaskResultsTick() {
 }
 
 let automationTickBusy = false;
-async function runAutomationTickQueued(force) {
+let morningPipelineBusy = false;
+
+function schedulerOwnedByMorningPipeline(options = {}) {
+  return morningPipelineBusy && options.fromMorningPipeline !== true;
+}
+
+async function runAutomationTickQueued(force, options = {}) {
+  if (schedulerOwnedByMorningPipeline(options)) {
+    return { ok: true, skipped: true, reason: "morning pipeline owns scheduler" };
+  }
   if (automationTickBusy) {
     return { ok: true, skipped: true, reason: "previous automation tick is still running" };
   }
@@ -2623,7 +2655,10 @@ async function runAutomationTickQueued(force) {
 }
 
 let dropScanBusy = false;
-async function runDropFolderScanQueued(trigger, allowDisabled) {
+async function runDropFolderScanQueued(trigger, allowDisabled, options = {}) {
+  if (schedulerOwnedByMorningPipeline(options)) {
+    return { ok: true, skipped: true, reason: "morning pipeline owns scheduler" };
+  }
   if (dropScanBusy) {
     return { ok: true, skipped: true, reason: "previous drop scan is still running" };
   }
@@ -2715,6 +2750,7 @@ const updatableFields = {
   materials: ["platform", "type", "author", "possibleUse", "excerpt", "whyValuable", "citationNote"],
   topics: ["title", "coreIdea", "targetReader", "minimalPublishableVersion", "stage", "productionChecks", "gates"]
 };
+const editableSettingFields = ["inboxTime", "inboxDailyLimit"];
 
 function patchRecord(type, record, patch = {}) {
   const allowedFields = updatableFields[type];
@@ -2738,6 +2774,30 @@ function patchRecord(type, record, patch = {}) {
     }
   }
   return updated;
+}
+
+function validateSettingsPatch(patch = {}) {
+  if (!patch || Array.isArray(patch) || typeof patch !== "object") throw new Error("patch must be an object");
+  const suppliedFields = Object.keys(patch);
+  if (!suppliedFields.length) throw new Error("patch cannot be empty");
+
+  const unsupportedFields = suppliedFields.filter((field) => !editableSettingFields.includes(field));
+  if (unsupportedFields.length) throw new Error(`fields are not editable: ${unsupportedFields.join(", ")}`);
+
+  const validated = {};
+  if (Object.hasOwn(patch, "inboxTime")) {
+    if (typeof patch.inboxTime !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(patch.inboxTime)) {
+      throw new Error("inboxTime must use HH:MM in 24-hour time");
+    }
+    validated.inboxTime = patch.inboxTime;
+  }
+  if (Object.hasOwn(patch, "inboxDailyLimit")) {
+    if (!Number.isInteger(patch.inboxDailyLimit) || patch.inboxDailyLimit < 1 || patch.inboxDailyLimit > 100) {
+      throw new Error("inboxDailyLimit must be an integer between 1 and 100");
+    }
+    validated.inboxDailyLimit = patch.inboxDailyLimit;
+  }
+  return validated;
 }
 
 function validatePublicationRecord(state, record = {}) {
@@ -2780,7 +2840,10 @@ function validateTopicStageTransition(state, topic, nextStage) {
 }
 
 let agentResultScanBusy = false;
-async function runAgentResultScanQueued() {
+async function runAgentResultScanQueued(options = {}) {
+  if (schedulerOwnedByMorningPipeline(options)) {
+    return { ok: true, skipped: true, reason: "morning pipeline owns scheduler" };
+  }
   if (agentResultScanBusy) {
     return { ok: true, skipped: true, reason: "previous agent result scan is still running" };
   }
@@ -2798,61 +2861,203 @@ async function runAgentResultScanQueued() {
   }
 }
 
-let morningPipelineBusy = false;
+function morningPipelineCount(value) {
+  const count = Number(value);
+  return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+}
+
+function initialMorningPipelineOperations(startedAt) {
+  return {
+    dropFolder: {
+      status: "running",
+      startedAt,
+      finishedAt: "",
+      total: 0,
+      created: 0,
+      failed: 0,
+      pending: 0,
+      results: []
+    },
+    collection: {
+      status: "running",
+      startedAt,
+      finishedAt: "",
+      total: 0,
+      failed: 0,
+      blocked: 0,
+      skipped: 0,
+      envelope: null
+    },
+    agentResults: {
+      status: "running",
+      startedAt,
+      finishedAt: "",
+      changed: false,
+      readyCount: 0
+    }
+  };
+}
+
+function morningPipelineOperationFromResult(stage, result, previous = {}) {
+  const value = result && typeof result === "object" ? result : {};
+  const results = Array.isArray(value.results) ? value.results : [];
+  const nestedStatusCount = (status) => results.filter((item) => item?.status === status).length;
+  const errors = [
+    value.error,
+    value.failureReason,
+    ...results
+      .filter((item) => ["failed", "pending", "blocked"].includes(item?.status))
+      .map((item) => item?.error || item?.failureReason)
+  ].map((item) => String(item || "").trim()).filter(Boolean);
+
+  return {
+    ...previous,
+    status: operationStatusFromResult(value),
+    startedAt: previous.startedAt || now(),
+    finishedAt: now(),
+    total: morningPipelineCount(value.total),
+    created: morningPipelineCount(value.created),
+    failed: Math.max(morningPipelineCount(value.failed), nestedStatusCount("failed")),
+    blocked: Math.max(morningPipelineCount(value.blocked), nestedStatusCount("blocked")),
+    pending: Math.max(morningPipelineCount(value.pending), nestedStatusCount("pending")),
+    partial: Math.max(morningPipelineCount(value.partial), nestedStatusCount("partial")),
+    skipped: Math.max(morningPipelineCount(value.skipped), value.skipped === true ? 1 : 0),
+    okCount: morningPipelineCount(value.okCount),
+    changed: value.changed === true,
+    readyCount: morningPipelineCount(value.readyCount),
+    envelope: value.envelope || previous.envelope || null,
+    reason: String(value.reason || ""),
+    error: errors[0] || "",
+    results: results.slice(0, 20).map((item) => ({
+      fileName: String(item?.fileName || ""),
+      status: String(item?.status || ""),
+      created: morningPipelineCount(item?.created),
+      duplicates: morningPipelineCount(item?.duplicates),
+      invalid: morningPipelineCount(item?.invalid),
+      error: String(item?.error || item?.failureReason || "")
+    })),
+    stage
+  };
+}
+
+function failedMorningPipelineOperation(previous = {}, error) {
+  return {
+    ...previous,
+    status: "failed",
+    finishedAt: now(),
+    error: String(error?.message || error || "unknown pipeline operation error")
+  };
+}
+
+async function updateMorningPipelineRecord(runId, mutate, { final = false } = {}) {
+  return enqueueStateMutation(async () => {
+    const state = await readState();
+    const index = (state.morningPipelineRuns || []).findIndex((item) => item.id === runId);
+    if (index < 0) throw new Error("morning pipeline run record not found");
+
+    const record = {
+      ...state.morningPipelineRuns[index],
+      operations: { ...(state.morningPipelineRuns[index].operations || {}) },
+      updatedAt: now()
+    };
+    mutate(record, state);
+    if (final) {
+      record.finishedAt = now();
+      record.briefChanged = refreshMorningBrief(state);
+    }
+    record.status = aggregatePipelineStatus(record.operations);
+    const pipeline = morningPipelineRuntime(state, {
+      automationEnabled: automationEnabled(state),
+      lastRun: record
+    });
+    record.stages = pipeline.stages;
+    record.nextActions = pipeline.nextActions;
+
+    state.morningPipelineRuns[index] = record;
+    state.morningPipelineRuns = [
+      record,
+      ...state.morningPipelineRuns.filter((item) => item.id !== runId)
+    ].slice(0, 30);
+    await writeState(state, final ? {} : { backup: false });
+    return record;
+  });
+}
+
 async function runMorningPipelineQueued() {
   if (morningPipelineBusy) {
     throw new Error("previous morning pipeline is still running");
   }
   morningPipelineBusy = true;
   const startedAt = now();
+  const runId = id("morning-pipeline");
+  const operationResults = {};
   try {
-    const operations = {
-      dropFolder: await runDropFolderScanQueued("morning-pipeline", true),
-      collection: await runAutomationTickQueued(false),
-      agentResults: await runAgentResultScanQueued()
-    };
-
-    const run = await enqueueStateMutation(async () => {
+    await enqueueStateMutation(async () => {
       const state = await readState();
-      const briefChanged = refreshMorningBrief(state);
-      const pipeline = morningPipelineRuntime(state, { automationEnabled: automationEnabled(state) });
       const record = {
-        id: id("morning-pipeline"),
+        id: runId,
+        status: "running",
         startedAt,
-        finishedAt: now(),
-        briefChanged,
-        stages: pipeline.stages,
-        nextActions: pipeline.nextActions,
-        operations: {
-          dropFolder: {
-            status: operations.dropFolder?.skipped ? "skipped" : "ok",
-            total: operations.dropFolder?.total || 0,
-            created: operations.dropFolder?.created || 0,
-            failed: operations.dropFolder?.failed || 0
-          },
-          collection: {
-            status: operations.collection?.skipped ? "skipped" : "ok",
-            total: operations.collection?.total || 0,
-            envelope: operations.collection?.envelope || null
-          },
-          agentResults: {
-            status: "ok",
-            changed: operations.agentResults?.changed === true,
-            readyCount: operations.agentResults?.readyCount || 0
-          }
-        }
+        updatedAt: startedAt,
+        finishedAt: "",
+        briefChanged: false,
+        stages: [],
+        nextActions: [],
+        operations: initialMorningPipelineOperations(startedAt)
       };
+      const pipeline = morningPipelineRuntime(state, {
+        automationEnabled: automationEnabled(state),
+        lastRun: record
+      });
+      record.stages = pipeline.stages;
+      record.nextActions = pipeline.nextActions;
       state.morningPipelineRuns = [record, ...(state.morningPipelineRuns || [])].slice(0, 30);
-      await writeState(state);
-      return record;
+      await writeState(state, { backup: false });
     });
 
+    const stages = [
+      {
+        name: "dropFolder",
+        run: () => runDropFolderScanQueued("morning-pipeline", true, { fromMorningPipeline: true })
+      },
+      {
+        name: "collection",
+        run: () => runAutomationTickQueued(false, { fromMorningPipeline: true })
+      },
+      {
+        name: "agentResults",
+        run: () => runAgentResultScanQueued({ fromMorningPipeline: true })
+      }
+    ];
+
+    for (const stage of stages) {
+      let result;
+      try {
+        result = await stage.run();
+        operationResults[stage.name] = result;
+      } catch (error) {
+        operationResults[stage.name] = { ok: false, status: "failed", error: error.message };
+        await updateMorningPipelineRecord(runId, (record) => {
+          record.operations[stage.name] = failedMorningPipelineOperation(record.operations[stage.name], error);
+        });
+        continue;
+      }
+      await updateMorningPipelineRecord(runId, (record) => {
+        record.operations[stage.name] = morningPipelineOperationFromResult(
+          stage.name,
+          result,
+          record.operations[stage.name]
+        );
+      });
+    }
+
+    const run = await updateMorningPipelineRecord(runId, () => {}, { final: true });
     return {
-      ok: true,
+      ok: run.status === "ok",
       run,
-      dropFolder: operations.dropFolder,
-      collection: operations.collection,
-      agentResults: operations.agentResults
+      dropFolder: operationResults.dropFolder,
+      collection: operationResults.collection,
+      agentResults: operationResults.agentResults
     };
   } finally {
     morningPipelineBusy = false;
@@ -2988,10 +3193,41 @@ async function handleApi(request, response, pathname) {
       return sendJson(response, 200, result, request);
     }
 
+    if (pathname === "/api/reviews/save") {
+      const advanceToReviewed = body.advanceToReviewed === true;
+      const result = await enqueueStateMutation(async () => {
+        const state = await readState();
+        const record = body.record || {};
+        const topic = (state.topics || []).find((item) => item.id === record.topicId);
+        if (!topic) throw new Error("复盘必须关联一个已存在的选题");
+        const totals = importRecords(state, "reviews", [record]);
+
+        if (advanceToReviewed) {
+          if (topic.stage !== "published") {
+            throw new Error("只有已发选题保存复盘后，才能自动进入已复盘");
+          }
+          validateTopicStageTransition(state, topic, "reviewed");
+          const topicIndex = state.topics.findIndex((item) => item.id === topic.id);
+          state.topics[topicIndex] = { ...topic, stage: "reviewed", updatedAt: now() };
+        }
+
+        refreshEngagementMetrics(state);
+        await writeState(state);
+        return { ok: true, ...totals };
+      });
+      return sendJson(response, 200, result, request);
+    }
+
     if (pathname === "/api/update") {
       const result = await enqueueStateMutation(async () => {
         const state = await readState();
         const { type, id: recordId, patch = {} } = body;
+        if (type === "settings") {
+          const settingsPatch = validateSettingsPatch(patch);
+          Object.assign(state.settings, settingsPatch);
+          await writeState(state);
+          return { ok: true, settings: state.settings };
+        }
         if (!updatableFields[type]) throw new Error("unknown or read-only record type");
         if (!Array.isArray(state[type])) throw new Error("record type is invalid");
         const index = state[type].findIndex((record) => record.id === recordId);
@@ -3144,42 +3380,76 @@ async function handleApi(request, response, pathname) {
 }
 
 async function serveStatic(request, response, pathname) {
+  const method = request.method || "GET";
+  if (method !== "GET" && method !== "HEAD") {
+    response.writeHead(405, { "content-type": "text/plain; charset=utf-8", allow: "GET, HEAD" });
+    return response.end("method not allowed");
+  }
   if (pathname.includes("\0")) {
-    response.writeHead(403);
+    response.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
     return response.end("forbidden");
   }
-  const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-  const filePath = path.normalize(path.join(appDir, relative));
-  const containedPath = path.relative(appDir, filePath);
-  if (!containedPath || path.isAbsolute(containedPath) || containedPath.startsWith("..")) {
-    response.writeHead(403);
+  const relative = pathname === "/" ? "index.html" : pathname.replace(/^[/\\]+/, "");
+  const filePath = path.resolve(distDir, relative);
+  const containedPath = path.relative(distDir, filePath);
+  if (!containedPath || path.isAbsolute(containedPath) || containedPath === ".." || containedPath.startsWith(`..${path.sep}`)) {
+    response.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
     return response.end("forbidden");
   }
   try {
     const content = await fs.readFile(filePath);
     response.writeHead(200, {
       "content-type": contentTypes[path.extname(filePath).toLowerCase()] || "application/octet-stream",
-      "cache-control": "no-store"
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff"
     });
-    response.end(content);
-  } catch {
+    return response.end(method === "HEAD" ? undefined : content);
+  } catch (error) {
+    if (error.code !== "ENOENT" && error.code !== "ENOTDIR" && error.code !== "EISDIR") {
+      response.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+      return response.end("static file read failed");
+    }
+  }
+
+  const relativeSegments = relative.split(/[/\\]+/);
+  const missingStaticFile = relative !== "index.html"
+    && (relativeSegments[0] === "assets" || Boolean(path.extname(relative)));
+  if (missingStaticFile) {
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-    response.end("not found");
+    return response.end("not found");
+  }
+
+  try {
+    const fallback = await fs.readFile(path.join(distDir, "index.html"));
+    response.writeHead(200, {
+      "content-type": contentTypes[".html"],
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff"
+    });
+    response.end(method === "HEAD" ? undefined : fallback);
+  } catch {
+    response.writeHead(503, { "content-type": "text/plain; charset=utf-8" });
+    response.end("前端尚未构建，请先执行 npm run build:ui");
   }
 }
 
 const server = http.createServer(async (request, response) => {
+  let isApiRequest = false;
   try {
-    const pathname = decodeURIComponent(new URL(request.url, `http://${request.headers.host}`).pathname);
-    if (pathname.startsWith("/api/")) await handleApi(request, response, pathname);
+    const pathname = decodeURIComponent(new URL(request.url || "/", "http://127.0.0.1").pathname);
+    isApiRequest = pathname === "/api" || pathname.startsWith("/api/");
+    if (isApiRequest) await handleApi(request, response, pathname);
     else await serveStatic(request, response, pathname);
   } catch (error) {
-    sendJson(response, 500, { ok: false, error: error.message }, request);
+    if (isApiRequest) return sendJson(response, 500, { ok: false, error: error.message }, request);
+    response.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+    response.end(error instanceof URIError ? "bad request path" : "bad request");
   }
 });
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`Personal Content Workbench: http://127.0.0.1:${port}`);
+  console.log(`Static UI: ${distDir}`);
   console.log(`Automation scheduler: ${["false", "0", "off"].includes(String(process.env.AUTOMATION_ENABLED || "").toLowerCase()) ? "disabled" : "enabled"}, tick ${automationTickMs}ms`);
   console.log(`Drop folder scanner: ${dropDir}, scan ${dropScanMs}ms`);
 });

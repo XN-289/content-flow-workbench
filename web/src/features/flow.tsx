@@ -1,0 +1,435 @@
+import React, { useMemo, useState } from "react";
+import { api } from "../lib/api";
+import { DISPOSITION_LABEL, EVIDENCE_STATE_LABEL } from "../lib/constants";
+import { capabilityLabel, capabilityTone, fmtDate, fmtDateTime, platformLabel, toneForEvidence } from "../lib/format";
+import { useStore } from "../state/store";
+import { Shell } from "../components/AppShell";
+import { Button, Card, Chip, EmptyState, Field, QueueRow, Segmented, Sheet, TimelineItem } from "../components/primitives";
+
+const FILTERS = [
+  { value: "inbox", label: "待分诊" },
+  { value: "produce", label: "可生产" },
+  { value: "topic", label: "做选题" },
+  { value: "material", label: "入素材" },
+  { value: "watch", label: "观察" },
+  { value: "all", label: "全部" }
+];
+
+function topicDefaults(record: any) {
+  return {
+    ...record,
+    format: record.format || "spoken-video",
+    platforms: record.platforms || ["douyin", "xiaohongshu", "wechat"],
+    stage: record.stage || "topic",
+    productionChecks: record.productionChecks || {
+      coreIdea: false,
+      targetReader: false,
+      hook: false,
+      outline: false,
+      evidence: false,
+      visuals: false,
+      publishPackage: false
+    },
+    gates: record.gates || { evidence: false, opening: false, sample: false, final: false }
+  };
+}
+
+export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
+  const { state, mutate, busy, setView } = useStore();
+  const [filter, setFilter] = useState("inbox");
+  const [sourceId, setSourceId] = useState<string | null>(null);
+  const [verify, setVerify] = useState<any>(null);
+  const [verifyNote, setVerifyNote] = useState("");
+  const [verifyState, setVerifyState] = useState("verified");
+  const [sheetError, setSheetError] = useState<string | null>(null);
+
+  const runtime = state?.runtime || {};
+  const commandCenter = runtime.commandCenter || {};
+  const capabilities = runtime.platformCapabilities || {};
+  const evidenceSummary = runtime.evidencePackages || {};
+
+  const records: any[] = useMemo(() => commandCenter.records || [], [commandCenter]);
+  const signals = state?.signals || [];
+  const evidenceBySignal = useMemo(() => {
+    const map: Record<string, any> = {};
+    (state?.evidencePackages || []).forEach((item: any) => {
+      map[item.signalId] = item;
+    });
+    return map;
+  }, [state]);
+  const transcriptBySignal = useMemo(() => {
+    const map: Record<string, any> = {};
+    (state?.transcriptRuns || []).forEach((item: any) => {
+      map[item.signalId] = item;
+    });
+    return map;
+  }, [state]);
+
+  if (!state) return null;
+
+  const visibleSignals = (filter === "all" ? signals : signals.filter((signal: any) => signal.disposition === filter))
+    .slice()
+    .sort((a: any, b: any) => String(b.capturedAt || "").localeCompare(String(a.capturedAt || "")));
+
+  const activeRecord = records.find((record) => record.sourceId === sourceId) || records[0];
+  const activeSource = state.sources.find((source: any) => source.id === activeRecord?.sourceId);
+
+  const setDisposition = (signalId: string, disposition: string) =>
+    mutate(`signal-${signalId}`, () => api.update("signals", signalId, { disposition, seen: true }), `已标记为${DISPOSITION_LABEL[disposition] || disposition}`);
+
+  const createTopic = (signal: any) =>
+    mutate(
+      "topic",
+      async () => {
+        const created = await api.record("topics", topicDefaults({ title: signal.title, coreIdea: "", targetReader: "", sourceSignalIds: [signal.id] }));
+        await api.update("signals", signal.id, { disposition: "topic", seen: true });
+        return created;
+      },
+      "选题已创建"
+    );
+
+  const openVerify = (item: any) => {
+    setSheetError(null);
+    setVerify(item);
+    setVerifyState(item.verification?.state === "unverified" ? "verified" : "unverified");
+    setVerifyNote(item.verification?.note || "");
+  };
+
+  const submitVerify = async () => {
+    try {
+      await api.evidenceVerify(verify.id, verifyState, verifyNote);
+      setVerify(null);
+      await mutate("verify", () => Promise.resolve(), "证据包状态已更新");
+    } catch (err: any) {
+      setSheetError(err.message || "更新失败");
+    }
+  };
+
+  return (
+    <>
+      <Shell
+        queueLabel="对标账号"
+        inspectorLabel="平台能力与证据"
+        queue={
+          <>
+            <div className="card-head">
+              <h2 className="card-title">对标账号</h2>
+              <span className="card-sub">{state.sources.length} 个</span>
+            </div>
+            <div className="queue">
+              {records.map((record) => {
+                const coverageStatus = record.coverage?.status;
+                const tone = coverageStatus === "blocked" ? "danger" : record.controlStatus === "manual" ? "warning" : "success";
+                return (
+                  <QueueRow
+                    key={record.sourceId}
+                    selected={record.sourceId === activeRecord?.sourceId}
+                    tone={tone}
+                    title={record.name}
+                    meta={`${platformLabel(record.platform)} · ${record.coverage?.collectedCount ?? 0}/${record.coverage?.totalNotes ?? "?"} 已采集`}
+                    right={<Chip tone={tone}>{coverageStatus === "blocked" ? "受阻" : record.controlStatus === "manual" ? "待人工" : "正常"}</Chip>}
+                    onClick={() => setSourceId(record.sourceId)}
+                  />
+                );
+              })}
+              {!records.length ? <EmptyState text="还没有对标账号" /> : null}
+            </div>
+
+            <div className="stack" style={{ gap: 6 }}>
+              <span className="section-label">Inbox</span>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                <span className="muted">待分诊</span>
+                <span className="tabular subtle">{runtime.inbox?.pending ?? 0}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                <span className="muted">可生产</span>
+                <span className="tabular subtle">{runtime.inbox?.actionable ?? 0}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                <span className="muted">证据包未校验</span>
+                <span className="tabular subtle">{evidenceSummary.unverified ?? 0}</span>
+              </div>
+            </div>
+          </>
+        }
+        canvas={
+          <>
+            {activeRecord ? (
+              <Card
+                title={activeRecord.name}
+                hint={`${platformLabel(activeRecord.platform)} · ${activeRecord.collectionMethod || "采集方式未标注"}`}
+                actions={
+                  <>
+                    <Button
+                      small
+                      disabled={busy === `collect-${activeRecord.sourceId}`}
+                      onClick={() => mutate(`collect-${activeRecord.sourceId}`, () => api.collect(activeRecord.sourceId), "已触发采集")}
+                    >
+                      立即采集
+                    </Button>
+                    <Button small onClick={() => mutate("drop", () => api.dropFolderScan(), "投递箱已扫描")}>
+                      扫描投递箱
+                    </Button>
+                  </>
+                }
+              >
+                <div className="stack" style={{ gap: 8 }}>
+                  {activeSource?.url ? (
+                    <div className="source-line">
+                      <span className="section-label">主页</span>
+                      <a
+                        className="source-link"
+                        href={activeSource.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={activeSource.url}
+                      >
+                        <span>{activeSource.url.replace(/^https?:\/\//, "").replace(/\/$/, "")}</span>
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                          <path d="M4.5 2H2.8C2.36 2 2 2.36 2 2.8V9.2C2 9.64 2.36 10 2.8 10H9.2C9.64 10 10 9.64 10 9.2V7.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                          <path d="M6.8 2H10V5.2M9.7 2.3L5.4 6.6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </a>
+                    </div>
+                  ) : (
+                    <div className="source-line">
+                      <span className="section-label">主页</span>
+                      <span className="subtle" style={{ fontSize: 12 }}>未登记主页链接</span>
+                    </div>
+                  )}
+                  <div className="inline">
+                    <Chip tone={activeRecord.coverage?.status === "blocked" ? "danger" : "success"}>
+                      覆盖率 {activeRecord.coverage?.percent ?? 0}%
+                    </Chip>
+                    {activeRecord.coverage?.blockedNoteCount ? <Chip tone="warning">{activeRecord.coverage.blockedNoteCount} 条受阻</Chip> : null}
+                    {activeRecord.coverage?.identityStatus === "note-id-unavailable" ? <Chip tone="warning">缺 noteId</Chip> : null}
+                  </div>
+                  {activeRecord.nextAction ? (
+                    <p className="muted" style={{ fontSize: 13, lineHeight: "22px" }}>
+                      {activeRecord.nextAction}
+                    </p>
+                  ) : null}
+                </div>
+              </Card>
+            ) : null}
+
+            <Card
+              title="Inbox 分诊"
+              hint={`${visibleSignals.length} 条 · 每屏只做判断，不做长表单`}
+              actions={
+                <Segmented
+                  ariaLabel="Inbox 筛选"
+                  value={filter}
+                  onChange={setFilter}
+                  options={FILTERS.map((item) => ({
+                    value: item.value,
+                    label: `${item.label}${
+                      item.value === "all"
+                        ? ` ${signals.length}`
+                        : ` ${signals.filter((signal: any) => signal.disposition === item.value).length}`
+                    }`
+                  }))}
+                />
+              }
+            >
+              <div className="signal-list">
+                {visibleSignals.slice(0, 40).map((signal: any, signalIndex: number) => {
+                  const evidence = evidenceBySignal[signal.id];
+                  const transcript = transcriptBySignal[signal.id];
+                  // 「下一条该处理的」= 当前筛选下第一条仍待分诊的信号
+                  const isNextSignal = signalIndex === 0 && signal.disposition === "inbox";
+                  const source = state.sources.find((item: any) => item.id === signal.sourceId);
+                  const isFocus = focusSignalId === signal.id;
+                  return (
+                    <div
+                      key={signal.id}
+                      className="signal-row"
+                      data-signal-id={signal.id}
+                      data-focused={isFocus ? "true" : undefined}
+                    >
+                      <div className="card-head">
+                        <div className="stack" style={{ gap: 2, minWidth: 0 }}>
+                          <strong style={{ fontSize: 13 }}>{signal.title}</strong>
+                          <span className="subtle" style={{ fontSize: 11 }}>
+                            {source?.name || "未知来源"} · {platformLabel(signal.platform)} · {fmtDate(signal.capturedAt)}
+                          </span>
+                        </div>
+                        <div className="inline">
+                          <Chip tone={signal.disposition === "inbox" ? "warning" : signal.disposition === "discard" ? "neutral" : "action"}>
+                            {DISPOSITION_LABEL[signal.disposition] || signal.disposition}
+                          </Chip>
+                        </div>
+                      </div>
+                      <div className="inline">
+                        {evidence ? (
+                          <Chip tone={toneForEvidence(evidence.verification?.state)}>
+                            证据包 · {EVIDENCE_STATE_LABEL[evidence.verification?.state] || evidence.verification?.state}
+                          </Chip>
+                        ) : (
+                          <Chip tone="neutral">无证据包</Chip>
+                        )}
+                        {transcript ? (
+                          <Chip tone={transcript.status === "failed" ? "danger" : "candidate"}>
+                            逐字稿 · {transcript.status === "failed" ? "失败" : "unverified"}
+                          </Chip>
+                        ) : null}
+                      </div>
+                      <div className="inline">
+                        {/* 主行动只给“下一条该处理的信号”，其余行降级为次级动作，避免每行都是主按钮 */}
+                        <Button small variant={isNextSignal ? "primary" : "secondary"} onClick={() => createTopic(signal)} disabled={busy === "topic"}>
+                          开选题
+                        </Button>
+                        <Button small variant="ghost" onClick={() => setDisposition(signal.id, "material")}>
+                          入素材
+                        </Button>
+                        <Button small variant="ghost" onClick={() => setDisposition(signal.id, "watch")}>
+                          观察
+                        </Button>
+                        <Button small variant="ghost" onClick={() => setDisposition(signal.id, "discard")}>
+                          丢弃
+                        </Button>
+                        {!evidence ? (
+                          <Button small disabled={busy === `evidence-${signal.id}`} onClick={() => mutate(`evidence-${signal.id}`, () => api.evidenceCreate(signal.id), "证据包已创建")}>
+                            建证据包
+                          </Button>
+                        ) : (
+                          <Button small onClick={() => openVerify(evidence)}>
+                            核对证据
+                          </Button>
+                        )}
+                        <Button
+                          small
+                          disabled={busy === `transcript-${signal.id}`}
+                          onClick={() => mutate(`transcript-${signal.id}`, () => api.transcript(signal.id), "已请求转写")}
+                        >
+                          转写媒体
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!visibleSignals.length ? <EmptyState text="这个筛选下没有信号" action={<Button onClick={() => setFilter("all")}>看全部</Button>} /> : null}
+              </div>
+            </Card>
+          </>
+        }
+        inspector={
+          <>
+            <Card title="平台能力矩阵" hint="安全边界，不保存登录态" tight>
+              <div className="stack" style={{ gap: 10 }}>
+                {(capabilities.platforms || []).map((platform: any) => (
+                  <div key={platform.id} className="stack" style={{ gap: 4 }}>
+                    <div className="inline">
+                      <strong style={{ fontSize: 12 }}>{platform.label}</strong>
+                      <Chip tone="neutral">{platform.sourceCount} 个源</Chip>
+                    </div>
+                    <div className="inline">
+                      {(capabilities.dimensions || []).map((dimension: any) => {
+                        const capability = platform.capabilities?.[dimension.id];
+                        return (
+                          <Chip key={dimension.id} tone={capabilityTone(capability?.status)}>
+                            {dimension.label} · {capabilityLabel(capability?.status)}
+                          </Chip>
+                        );
+                      })}
+                    </div>
+                    <div className="stack" style={{ gap: 3, minWidth: 0 }}>
+                      <span className="section-label">登录边界</span>
+                      <span className="subtle" style={{ fontSize: 11, lineHeight: "16px", overflowWrap: "anywhere" }}>
+                        {platform.loginBoundary || "未声明登录边界"}
+                      </span>
+                      <span className="section-label">风险边界</span>
+                      <span className="subtle" style={{ fontSize: 11, lineHeight: "16px", overflowWrap: "anywhere" }}>
+                        {platform.riskBoundary || "未声明风险边界"}
+                      </span>
+                      <span className="section-label">采集方法</span>
+                      {(capabilities.dimensions || []).map((dimension: any) => {
+                        const capability = platform.capabilities?.[dimension.id];
+                        return (
+                          <span
+                            key={`method-${dimension.id}`}
+                            className="subtle"
+                            style={{ fontSize: 11, lineHeight: "16px", overflowWrap: "anywhere" }}
+                          >
+                            {dimension.label}：{capability?.method || "方法未标注"}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card title="证据与逐字稿" hint={`${state.evidencePackages.length} / ${state.transcriptRuns.length}`} tight>
+              <div className="queue">
+                {state.evidencePackages.slice(0, 6).map((item: any) => (
+                  <TimelineItem
+                    key={item.id}
+                    tone={toneForEvidence(item.verification?.state)}
+                    title={`证据包 · ${item.packageKey?.slice(-6)}`}
+                    meta={`${item.layers?.length || 0} 层 · ${fmtDate(item.updatedAt)}`}
+                    right={
+                      <Button small onClick={() => openVerify(item)}>
+                        核对
+                      </Button>
+                    }
+                  />
+                ))}
+                {state.transcriptRuns.slice(0, 4).map((item: any) => (
+                  <TimelineItem
+                    key={item.id}
+                    tone={item.status === "failed" ? "danger" : "candidate"}
+                    title={`逐字稿 · ${item.segmentCount ?? 0} 段`}
+                    meta={`${fmtDateTime(item.finishedAt)} · 耗时 ${item.durationSeconds ?? 0} 秒 · 待人工校对`}
+                    right={<Chip tone={item.status === "failed" ? "danger" : "candidate"}>{item.status === "failed" ? "失败" : "unverified"}</Chip>}
+                  />
+                ))}
+              </div>
+            </Card>
+          </>
+        }
+        mobileAction={
+          <Button variant="primary" onClick={() => setView("workflow")}>
+            去工作流推进当前选题
+          </Button>
+        }
+      />
+
+      <Sheet
+        open={Boolean(verify)}
+        title="核对证据包"
+        onClose={() => setVerify(null)}
+        footer={
+          <>
+            <Button onClick={() => setVerify(null)}>取消</Button>
+            <Button variant="primary" onClick={submitVerify}>
+              保存
+            </Button>
+          </>
+        }
+      >
+        {verify ? (
+          <>
+            <Field label="包标识">
+              <input className="input" value={verify.packageKey || ""} readOnly />
+            </Field>
+            <Field label="包含层" hint={verify.layers?.join("、") || "无"}>
+              <input className="input" value={`${verify.layers?.length || 0} 层`} readOnly />
+            </Field>
+            <Field label="校验结论" error={sheetError || undefined}>
+              <select className="select" value={verifyState} onChange={(e) => setVerifyState(e.target.value)}>
+                <option value="verified">已校验（可作为引用）</option>
+                <option value="unverified">保持 unverified（候选）</option>
+                <option value="rejected">驳回（证据不足）</option>
+              </select>
+            </Field>
+            <Field label="备注">
+              <textarea className="textarea" style={{ minHeight: 100 }} value={verifyNote} onChange={(e) => setVerifyNote(e.target.value)} />
+            </Field>
+          </>
+        ) : null}
+      </Sheet>
+    </>
+  );
+}

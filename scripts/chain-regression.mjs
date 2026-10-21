@@ -8,6 +8,14 @@ import { fileURLToPath } from "node:url";
 import { platformCapabilityRuntime } from "./platform-capabilities.mjs";
 import { createSignalEvidencePackage } from "./evidence-package.mjs";
 import { normalizeDetailCapture } from "./detail-evidence.mjs";
+import {
+  aggregatePipelineStatus,
+  isAutomaticCollectionCandidate,
+  isAutomaticCollectionDue,
+  isManualCollectionCandidate,
+  morningPipelineRuntime,
+  operationStatusFromResult
+} from "./morning-pipeline.mjs";
 import { resolveSourceIntakeUrl } from "./source-intake.mjs";
 import { applyTranscriptResult, selectTranscriptMedia } from "./transcribe-signal.mjs";
 
@@ -230,6 +238,96 @@ async function main() {
   workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir, transcriptDir);
   await waitForServer(base);
 
+  const dueAt = new Date(Date.now() - 60_000).toISOString();
+  const scheduledSource = {
+    enabled: true,
+    checkFrequency: "daily",
+    nextRunAt: dueAt
+  };
+  equal(
+    isAutomaticCollectionCandidate({ ...scheduledSource, collectionMethod: "public-rss" }),
+    true,
+    "public RSS is an automatic collection candidate"
+  );
+  equal(
+    isAutomaticCollectionDue({ ...scheduledSource, collectionMethod: "public-page" }),
+    true,
+    "due public page is automatically collectable"
+  );
+  equal(
+    isAutomaticCollectionDue({ ...scheduledSource, collectionMethod: "public-rss", nextRunAt: "" }),
+    false,
+    "missing schedule is not due"
+  );
+  equal(
+    isAutomaticCollectionCandidate({ ...scheduledSource, collectionMethod: "manual" }),
+    false,
+    "manual source is excluded from automatic collection"
+  );
+  equal(
+    isAutomaticCollectionCandidate({ ...scheduledSource, collectionMethod: "browser-assisted" }),
+    false,
+    "browser-assisted source is excluded from automatic collection"
+  );
+  equal(
+    isManualCollectionCandidate({ ...scheduledSource, collectionMethod: "manual" }),
+    true,
+    "manual source is queued for human action"
+  );
+  equal(
+    isManualCollectionCandidate({ ...scheduledSource, collectionMethod: "browser-assisted" }),
+    true,
+    "browser-assisted source is queued for human action"
+  );
+
+  const operationStatusCases = [
+    [{ status: "ok-no-new" }, "ok"],
+    [{ status: "pending" }, "pending"],
+    [{ status: "blocked" }, "blocked"],
+    [{ status: "failed" }, "failed"],
+    [{ skipped: true }, "skipped"],
+    [{ skipped: 2 }, "skipped"],
+    [{ status: "blocked", ok: false }, "blocked"],
+    [{ status: "pending", ok: false }, "pending"],
+    [{ status: "partial", ok: false }, "attention"],
+    [{ ok: true, results: [{ status: "partial" }] }, "attention"],
+    [{ ok: true, results: [{ status: "failed" }] }, "failed"],
+    [{ ok: false }, "failed"]
+  ];
+  for (const [result, expected] of operationStatusCases) {
+    equal(operationStatusFromResult(result), expected, `operation status from ${JSON.stringify(result)}`);
+  }
+  equal(aggregatePipelineStatus({ first: "ok", second: "pending" }), "pending", "aggregate pipeline pending status");
+  equal(aggregatePipelineStatus({ first: "pending", second: "failed" }), "failed", "aggregate pipeline failed precedence");
+  equal(aggregatePipelineStatus({ first: "skipped", second: "running" }), "running", "running stage is not hidden by skipped");
+  const statusPipeline = morningPipelineRuntime({
+    settings: { inboxTime: "09:00", inboxDailyLimit: 10 }
+  }, {
+    lastRun: {
+      operations: {
+        dropFolder: { status: "pending" },
+        collection: { status: "blocked" },
+        agentResults: { status: "failed" }
+      }
+    }
+  });
+  equal(
+    statusPipeline.stages.find((stage) => stage.id === "drop-folder")?.status,
+    "pending",
+    "morning stage preserves pending operation status"
+  );
+  equal(
+    statusPipeline.stages.find((stage) => stage.id === "collection")?.status,
+    "blocked",
+    "morning stage preserves blocked operation status"
+  );
+  equal(
+    statusPipeline.stages.find((stage) => stage.id === "agent-results")?.status,
+    "failed",
+    "morning stage preserves failed operation status"
+  );
+  pass("自动候选、人工队列与晨间阶段状态共用同一套诚实判定");
+
   const provenanceSignal = {
     id: "signal-provenance-regression",
     sourceId: "source-provenance-regression",
@@ -393,6 +491,13 @@ async function main() {
   await updateStage(base, lifecycleTopic.id, "ready-to-publish");
   pass("选题按相邻阶段推进，并执行四关卡与七项检查");
 
+    await failingApi(base, "/api/reviews/save", {
+      advanceToReviewed: true,
+      record: { topicId: lifecycleTopic.id, assumption: "未发布时不得推进", result: "应整体回滚" }
+    }, /只有已发选题/);
+    current = await state(base);
+    equal(current.reviews.filter((review) => review.topicId === lifecycleTopic.id).length, 0, "failed review transaction leaves no record");
+
   await api(base, "/api/record", {
     type: "publications",
     record: { topicId: lifecycleTopic.id, platform: "douyin", status: "published" }
@@ -416,12 +521,13 @@ async function main() {
     id: lifecycleTopic.id,
     patch: { stage: "reviewed" }
   }, /复盘记录/);
-  await api(base, "/api/record", {
-    type: "reviews",
-    record: { topicId: lifecycleTopic.id, assumption: "测试假设", result: "通过回归" }
+    await api(base, "/api/reviews/save", {
+      advanceToReviewed: true,
+      record: { topicId: lifecycleTopic.id, assumption: "测试假设", result: "通过回归" }
   });
-  await updateStage(base, lifecycleTopic.id, "reviewed");
-  pass("三平台台账与复盘记录是 published / reviewed 的硬门槛");
+    current = await state(base);
+    equal(current.topics.find((topic) => topic.id === lifecycleTopic.id)?.stage, "reviewed", "review transaction advances stage");
+    pass("三平台台账与复盘记录是 published / reviewed 的硬门槛，失败复盘事务不落盘");
 
   await api(base, "/api/record", {
     type: "publications",
@@ -448,16 +554,48 @@ async function main() {
     id: guardTopic.id,
     patch: { id: "overwritten", internalRuntime: "overwritten" }
   }, /fields are not editable/);
-  await failingApi(base, "/api/update", {
+  const firstSettingsUpdate = await api(base, "/api/update", {
     type: "settings",
-    id: "automation",
-    patch: { automationEnabled: false }
-  }, /unknown or read-only record type/);
+    patch: { inboxTime: "00:00", inboxDailyLimit: 1 }
+  });
+  equal(firstSettingsUpdate.settings.inboxTime, "00:00", "earliest valid inbox time");
+  equal(firstSettingsUpdate.settings.inboxDailyLimit, 1, "minimum valid inbox daily limit");
+  await api(base, "/api/update", {
+    type: "settings",
+    patch: { inboxTime: "23:59", inboxDailyLimit: 100 }
+  });
+  await api(base, "/api/update", {
+    type: "settings",
+    patch: { inboxTime: "09:00", inboxDailyLimit: 10 }
+  });
+  current = await state(base);
+  equal(current.settings.inboxTime, "09:00", "saved inbox time");
+  equal(current.settings.inboxDailyLimit, 10, "saved inbox daily limit");
+  const settingsBeforeInvalid = JSON.stringify(current.settings);
+  const invalidSettingsUpdates = [
+    [{ patch: {} }, /patch cannot be empty/],
+    [{ patch: [] }, /patch must be an object/],
+    [{ patch: { automationEnabled: false } }, /fields are not editable/],
+    [{ patch: { inboxTime: "24:00" } }, /inboxTime must use HH:MM/],
+    [{ patch: { inboxTime: "12:60" } }, /inboxTime must use HH:MM/],
+    [{ patch: { inboxTime: "9:00" } }, /inboxTime must use HH:MM/],
+    [{ patch: { inboxTime: "09:00 " } }, /inboxTime must use HH:MM/],
+    [{ patch: { inboxTime: 900 } }, /inboxTime must use HH:MM/],
+    [{ patch: { inboxDailyLimit: 0 } }, /inboxDailyLimit must be an integer between 1 and 100/],
+    [{ patch: { inboxDailyLimit: 101 } }, /inboxDailyLimit must be an integer between 1 and 100/],
+    [{ patch: { inboxDailyLimit: 1.5 } }, /inboxDailyLimit must be an integer between 1 and 100/],
+    [{ patch: { inboxDailyLimit: "10" } }, /inboxDailyLimit must be an integer between 1 and 100/]
+  ];
+  for (const [payload, messagePattern] of invalidSettingsUpdates) {
+    const rejected = await failingApi(base, "/api/update", { type: "settings", ...payload }, messagePattern);
+    equal(rejected.status, 400, "invalid settings return HTTP 400");
+  }
   current = await state(base);
   equal(current.topics.find((topic) => topic.id === guardTopic.id)?.stage, "outline", "guarded topic stage after rejected patch");
   truthy(current.topics.some((topic) => topic.id === guardTopic.id), "guarded topic identity after rejected patch");
-  equal(current.settings.automationEnabled, true, "automation setting after rejected patch");
-  pass("选题阶段不能跳级或回退，更新字段有白名单");
+  equal(JSON.stringify(current.settings), settingsBeforeInvalid, "settings stay unchanged after rejected patches");
+  equal(current.settings.automationEnabled, true, "automation setting remains outside generic settings patch");
+  pass("选题阶段不能跳级或回退，settings 仅允许严格校验的时间与每日上限");
 
   // Agent tasks stay local unless explicitly mirrored, and outline/script imports respect the topic state machine.
   await api(base, "/api/agent-bridge/settings", { driveRoot });
@@ -869,28 +1007,67 @@ async function main() {
     "platform capability statuses and boundaries"
   );
 
-  const morningPipelineRun = await api(base, "/api/morning-pipeline/run", {});
-  truthy(morningPipelineRun.ok, "morning pipeline run result flag");
-  equal(morningPipelineRun.run.operations.collection.status, "skipped", "morning pipeline collection operation status");
-  equal(morningPipelineRun.collection.skipped, true, "morning pipeline disabled collection skip flag");
+  await fs.writeFile(path.join(dropDir, "morning-invalid.json"), "{}", "utf8");
+  const firstMorningPipelineRun = await api(base, "/api/morning-pipeline/run", {});
+  equal(firstMorningPipelineRun.ok, false, "pending morning pipeline result flag");
+  equal(firstMorningPipelineRun.run.status, "pending", "pending morning pipeline aggregate status");
+  equal(firstMorningPipelineRun.run.operations.dropFolder.status, "pending", "morning pipeline pending drop operation");
+  equal(firstMorningPipelineRun.run.operations.collection.status, "skipped", "morning pipeline collection operation status");
+  equal(firstMorningPipelineRun.collection.skipped, true, "morning pipeline disabled collection skip flag");
+  const secondMorningPipelineRun = await api(base, "/api/morning-pipeline/run", {});
+  equal(secondMorningPipelineRun.ok, false, "failed morning pipeline result flag");
+  equal(secondMorningPipelineRun.run.status, "failed", "failed morning pipeline aggregate status");
+  equal(secondMorningPipelineRun.run.operations.dropFolder.status, "failed", "morning pipeline failed drop operation");
+  truthy(secondMorningPipelineRun.run.finishedAt, "morning pipeline finished timestamp");
   current = await state(base);
   equal(
     current.runtime.morningPipeline.stages.map((stage) => stage.id).join(","),
     "drop-folder,collection,agent-results,brief,inbox,production",
     "morning pipeline stage order"
   );
-  equal(current.runtime.morningPipeline.stages.find((stage) => stage.id === "collection").status, "blocked", "morning pipeline collection stage status");
-  equal(current.morningPipelineRuns.length, 1, "persisted morning pipeline run count");
+  equal(
+    current.runtime.morningPipeline.stages.find((stage) => stage.id === "drop-folder").status,
+    "failed",
+    "morning pipeline failed stage status"
+  );
+  equal(
+    current.runtime.morningPipeline.stages.find((stage) => stage.id === "collection").status,
+    "skipped",
+    "morning pipeline skipped collection stage status"
+  );
+  equal(current.morningPipelineRuns.length, 2, "persisted morning pipeline run count");
+  equal(current.morningPipelineRuns[0].id, secondMorningPipelineRun.run.id, "latest morning pipeline run is first");
+  equal(current.morningPipelineRuns[1].id, firstMorningPipelineRun.run.id, "older morning pipeline run is second");
+  truthy(
+    new Date(current.morningPipelineRuns[0].startedAt).getTime()
+      >= new Date(current.morningPipelineRuns[1].startedAt).getTime(),
+    "morning pipeline runs are newest-first"
+  );
+  const morningDropRuns = current.collectionRuns.filter((run) => run.fileName === "morning-invalid.json").slice(0, 2);
+  equal(morningDropRuns[0].status, "failed", "latest collection run is first");
+  equal(morningDropRuns[1].status, "pending", "older collection run is second");
+  truthy(
+    new Date(morningDropRuns[0].startedAt).getTime()
+      >= new Date(morningDropRuns[1].startedAt).getTime(),
+    "collection runs are newest-first"
+  );
   equal(
     current.runtime.platformCapabilities.platforms.map((platform) => platform.id).join(","),
     "x,xiaohongshu,douyin,wechat",
     "runtime platform capability platform order"
   );
-  pass("平台能力矩阵与一键晨间流水线按安全边界输出状态");
+  pass("晨间流水线保留 pending / failed 真实状态，运行记录按最新在前排列");
 
   const indexResponse = await fetch(`${base}/`);
   equal(indexResponse.status, 200, "workbench page status");
   const indexHtml = await indexResponse.text();
+  const deepLinkResponse = await fetch(`${base}/workflow`);
+  equal(deepLinkResponse.status, 200, "SPA deep-link status");
+  truthy((await deepLinkResponse.text()).includes('id="root"'), "SPA deep-link falls back to React shell");
+  const missingAssetResponse = await fetch(`${base}/assets/not-built.js`);
+  equal(missingAssetResponse.status, 404, "missing built asset status");
+  const missingExtensionlessAssetResponse = await fetch(`${base}/assets/no-extension`);
+  equal(missingExtensionlessAssetResponse.status, 404, "missing extensionless built asset status");
   const traversalResponse = await requestRoute(base, "/..%2fpackage.json");
   equal(traversalResponse.status, 403, "static traversal response status");
   const topicCountBeforeBodyLimit = (await state(base)).topics.length;
@@ -905,7 +1082,7 @@ async function main() {
   equal(oversizedResponse.status, 413, "oversized request response status");
   match(oversizedResponse.payload.error, /request body exceeds/, "oversized request error");
   equal((await state(base)).topics.length, topicCountBeforeBodyLimit, "topic count after oversized request");
-  pass("静态路径越界返回 403，超大请求返回 413 且不写主数据");
+  pass("单端口 SPA 回落、缺失资源拒绝、静态路径越界返回 403，超大请求返回 413 且不写主数据");
 
   const appJs = await fs.readFile(path.join(repoRoot, "app/app.js"), "utf8");
   truthy(appJs.includes("function browserCaptureToken"), "browser capture token helper");
@@ -1019,8 +1196,8 @@ async function main() {
   truthy(appJs.includes("function viewFromLocationHash"), "primary tab deep-link helper");
   truthy(appJs.includes("async function activateView"), "primary tab activation helper");
   truthy(appJs.includes('window.addEventListener("hashchange"'), "primary tab hash-change handler");
-  truthy(indexHtml.includes('data-theme="auto"') && indexHtml.includes('data-action="set-theme"'), "explicit theme mode switch");
-  truthy(appJs.includes("function setTheme") && appJs.includes("localStorage.setItem(themeStorageKey"), "theme mode persistence helper");
+  truthy(indexHtml.includes("cfw.theme") && indexHtml.includes('data-theme="light"'), "single-port React theme bootstrap");
+  truthy(indexHtml.includes("/assets/index-") && indexHtml.includes('id="root"'), "single-port React asset entry");
   const todayRenderer = appJs.slice(
     appJs.indexOf("function renderToday"),
     appJs.indexOf("function renderSources")

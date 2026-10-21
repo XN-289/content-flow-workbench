@@ -1,0 +1,197 @@
+/* ==========================================================================
+   Content Flow Workbench — 设计 Token（唯一事实来源）
+   与 docs/DESIGN.md 保持同步。修改颜色/间距/圆角只改这里。
+   浅色为默认，data-theme="dark" 覆盖；auto 模式由 JS 写入 data-theme。
+   ========================================================================== */
+
+:root {
+  /* ---- 表面阶梯（Linear 式：层级靠阶梯，不靠阴影） ---- */
+  --canvas: #f6f7f9;
+  --surface: #ffffff;
+  --surface-sunken: #f1f3f6;
+  --surface-hover: #e9ecf1;
+  --hairline: #e3e7ed;
+  --hairline-strong: #d3d9e2;
+
+  /* ---- 文字 ---- */
+  --ink: #10141c;
+  --ink-muted: #4a5567;
+  --ink-subtle: #778291;
+  --ink-on-action: #ffffff;
+
+  /* ---- 主行动色 ---- */
+  --action: #2563eb;
+  --action-hover: #1d4fd7;
+  --action-soft: #eef3ff;
+  --action-ink: #1b4bc4;
+  --action-gradient: linear-gradient(135deg, #2563eb 0%, #1d4fd7 100%);
+
+  /* ---- 状态四族 + 演练中性 ---- */
+  --success: #0f7a52;
+  --success-soft: #e8f6ef;
+  --warning: #9a5b00;
+  --warning-soft: #fff4e0;
+  --danger: #b42318;
+  --danger-soft: #fef3f2;
+  --candidate: #6941c6;
+  --candidate-soft: #f4f3ff;
+  --neutral-soft: #f1f3f6;
+
+  /* ---- 焦点 ---- */
+  --focus-ring: var(--action);
+  --focus-width: 2px;
+  --focus-offset: 2px;
+
+  /* ---- 间距（4pt 基准） ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* ---- 圆角（角色固定，禁止随手取值） ---- */
+  --radius-chip: 6px;
+  --radius-control: 8px;
+  --radius-card: 10px;
+  --radius-panel: 12px;
+  --radius-sheet: 16px;
+  --radius-pill: 999px;
+
+  /* ---- 阴影：仅浮层可用，静态卡片禁止 ---- */
+  --shadow-overlay: 0 8px 24px -8px rgba(16, 20, 28, 0.18), 0 2px 6px -2px rgba(16, 20, 28, 0.1);
+  --shadow-overlay-dark: 0 12px 32px -8px rgba(0, 0, 0, 0.6);
+
+  /* ---- 排版 ---- */
+  --font-ui: "Inter", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --text-2xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 20px;
+  --text-display: 24px;
+
+  /* ---- 动效 ---- */
+  --dur-micro: 120ms;
+  --dur-panel: 200ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* ---- 布局骨架 ---- */
+  --topbar-h: 56px;
+  --topbar-h-mobile: 52px;
+  --queue-w: 260px;
+  --inspector-w: 300px;
+  --page-pad: 24px;
+  --page-pad-mobile: 16px;
+  --card-pad: 20px;
+  --row-h: 36px;
+  --control-h: 32px;
+  --control-h-touch: 44px;
+}
+
+[data-theme="dark"] {
+  --canvas: #0e1116;
+  --surface: #151a21;
+  --surface-sunken: #1b222b;
+  --surface-hover: #232b36;
+  --hairline: #242c37;
+  --hairline-strong: #333d4a;
+
+  --ink: #e9ecf1;
+  --ink-muted: #98a3b3;
+  --ink-subtle: #6c7787;
+  --ink-on-action: #ffffff;
+
+  --action: #3f7bf0;
+  --action-hover: #5a8df5;
+  --action-soft: #16233d;
+  --action-ink: #8fb4ff;
+
+  --success: #35c08c;
+  --success-soft: #10251c;
+  --warning: #f0a93b;
+  --warning-soft: #2a1f0b;
+  --danger: #f2726a;
+  --danger-soft: #2a1312;
+  --candidate: #a98bf5;
+  --candidate-soft: #1f1836;
+  --neutral-soft: #1b222b;
+
+  --shadow-overlay: var(--shadow-overlay-dark);
+}
+
+/* ==========================================================================
+   基础层
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: 1.6; /* 中文正文行高不低于 1.6 */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 中文正文最小 12px；正文不得使用 12px 以下 */
+p,
+li,
+td,
+th,
+label,
+input,
+textarea,
+select {
+  font-size: var(--text-base);
+}
+
+.meta,
+.text-meta {
+  font-size: var(--text-2xs);
+  line-height: 16px;
+  color: var(--ink-subtle);
+}
+
+/* 数字不跳动 */
+.count,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   焦点：任何主题下都必须可见
+   ========================================================================== */
+
+:focus-visible {
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--radius-control);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

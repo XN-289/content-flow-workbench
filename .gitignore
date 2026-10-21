@@ -29,8 +29,10 @@ work/
 handoff/
 START_HERE.md
 docs/benchmark-blogger-candidates.md
-docs/platform-capabilities.md
 
 # OS and editor noise
 .DS_Store
 Thumbs.db
+
+# Superseded timestamped UI builds
+app/ui-*/

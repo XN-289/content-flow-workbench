@@ -1,6 +1,6 @@
 # TODO
 
-更新时间：2026-10-21 17:31
+更新时间：2026-10-22
 
 ## A. North Star 基线
 
@@ -30,7 +30,7 @@
 - [x] 按用户手感收敛信息架构：主导航只保留总览 / 信息流 / 工作流 / 系统四个大类 tab，大类内连续排列模块，不设二级 tab。
 - [x] 调研 Postiz、Mixpost 和 LangChain social-media-agent 的工作台模式，形成轻量吸收边界 — `docs/workbench-ux-research.md`。
 - [x] 总览新增每日行动优先队列和 3 条作品目标进度；信息流新增节奏条，工作流新增阶段漏斗，发布台账新增平台队列。
-- [x] 修复大类 hash 路由不重渲染和系统页移动端横向溢出。
+- [x] 四大类改用 `/`、`/flow`、`/workflow`、`/system` 浏览器路径，刷新与直达由单端口 SPA 回落承接；系统页移动端横向溢出已修复。
 - [x] 总览行动队列支持直接点击跳转，减少“看完队列再找入口”的二次操作。
 - [x] 工作流复盘区新增近 3 天摩擦摘要：记录数、总耗时、可模板化数量和最近卡点。
 - [x] 工作流制作区默认收起，展开后直接显示稿件正文和版本差异；复盘区新增“稿件回看”，已复盘选题仍可直接审阅历史版本。
@@ -72,10 +72,10 @@
 - [x] 实现小红书短链幂等解析：`xhslink.cn` 走 GET 登录重定向，从 `redirectPath` 还原无参数主页；重复登记只更新粉丝 / 赞藏元数据。
 - [x] 实现采集覆盖率留痕：显示本页已加载数、主页显示总数、工作台累计入库和补采下一步。
 - [x] 实现重复登记保护：同一账号重贴分享文案只更新粉丝等元数据，不重置已入库覆盖率。
-- [x] 用真实 Chrome Guest 验证 4 个新增作者的主页游客态 blocked 快照：主页分别显示 232 / 158 / 274 / 470 篇，首屏各 12 条均缺少 noteId；4 次运行均保存 raw snapshot、coverage 为 blocked、Inbox 新增 0，且未遇到人机验证。
+- [x] 用真实 Chrome Guest 验证多个新增作者的主页游客态 blocked 快照：主页仅显示可见内容总量，首屏候选均缺少 noteId；运行均保存 raw snapshot、coverage 为 blocked、Inbox 新增 0，且未遇到人机验证。
 - [x] 验证小红书游客态搜索字段反查：首页字段不触发搜索路由，直接搜索结果 URL 显示“登录后查看搜索结果”，无笔记候选，不能用于遍历 blocked 标题。
-- [x] 用真实 Chrome Guest 验证“补详情书签”的 blocked 与 missing 路径：`300017` 受限页成功落 raw snapshot 且标记 blocked；用户提供的 4 条可读详情页全部完成正文、封面、媒体清单、raw snapshot 和证据包，页面自身逐字稿均如实标记 missing，未伪造。
-- [x] 实现并验收单条信号本地 ASR 逐字稿：显式下载完整 MP4、本地 faster-whisper 转写、保留全文 / 时间轴 / 运行记录；4 条真实信号分别生成 1,995 / 1,456 / 1,665 / 894 字候选稿并进入证据包。
+- [x] 用真实 Chrome Guest 验证“补详情书签”的 blocked 与 missing 路径：受限页成功落 raw snapshot 且标记 blocked；用户提供的可读详情页样本完成正文、封面、媒体清单、raw snapshot 和证据包，页面自身逐字稿均如实标记 missing，未伪造。
+- [x] 实现并验收单条信号本地 ASR 逐字稿：显式下载完整 MP4、本地 faster-whisper 转写、保留全文 / 时间轴 / 运行记录；真实信号样本生成候选稿并进入证据包。
 - [ ] 逐条人工校对 4 条 ASR 候选稿的同音字、标点和术语；未完成前证据状态保持未核对。
 - [ ] 按平台补齐 source adapter：X、小红书、抖音、公众号；公开页面 adapter 已支持元数据和同站链接解析。
 - [x] 建立本地自动调度：到期采集、失败退避、并发保护、状态可见和自动化开关。
@@ -147,6 +147,10 @@
 - [x] 推送 `main` 到 GitHub。
 - [x] 提供本地服务登录自启脚本。
 - [x] 确认最终形态是 Windows 单用户本地桌面应用；当前 localhost 壳先跑通真实流程。
+- [x] 成品前端收敛为 React 19 + TypeScript + 纯 CSS token；构建稳定输出到 `app/dist`，由 `scripts/server.mjs` 在 5177 单端口同时托管页面与 API；`/`、`/flow`、`/workflow`、`/system` 支持刷新、深链和浏览器前进后退。
+- [x] 晨间流水线先持久化 `running` 再逐段更新，并按 `failed > blocked > pending > attention > running > skipped > ok` 聚合；独立后端回归覆盖状态、事务和失败路径。
+- [x] 后台自动调度只执行 `public-rss`、`public-page`，`manual` 与 `browser-assisted` 只进入人工队列；settings 更新限制为 `inboxTime`、`inboxDailyLimit`，复盘记录与 `reviewed` 推进使用事务。
+- [x] 发布前按完整边界执行安全扫描：Git 跟踪面与历史未报告候选；本地日志和忽略文件中的候选按暴露面单独记录，不宣称绝对无风险。
 - [x] 提供工作台内备份列表和恢复入口。
 - [x] 建立备份模块护栏：备份读写、哈希去重、保留策略和格式校验进入 `scripts/backup-store.mjs`，`server.mjs` 保留恢复编排；链路回归通过。
 - [ ] 建立模块化护栏：采集结果信封、证据包、Agent 桥接等新逻辑进入独立 `scripts/*.mjs` 模块，`server.mjs` 只保留路由、组合和轻量适配；每次拆分后保持链路回归通过。

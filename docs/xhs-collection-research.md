@@ -10,10 +10,10 @@
 
 | 方案 | 做法 | 对本项目的价值 | 风险判断 |
 | --- | --- | --- | --- |
-| [XHS-Downloader](https://github.com/JoeanAmier/XHS-Downloader) 用户脚本 | 从页面 `__INITIAL_STATE__.user.notes._rawValue` 读取已加载笔记，拿 `noteId + xsecToken` 后生成完整链接 | 最接近安全路线；也证明了应读页面状态而不是无障碍树 | 自动滚动默认关闭；项目文档明确警告开启后可能被检测为自动化并导致风控或封禁 |
-| [social-media-copilot](https://github.com/iszhouhua/social-media-copilot) | 浏览器插件 + 本地服务，在页面上下文调用 `/api/sns/web/v1/user_posted` 分页接口并做签名 | 架构值得参考：工作台做调度和存储，浏览器端做授权 adapter | 直接走平台接口和签名，能全量分页，但登录态、频率和封号风险不可忽略 |
-| [Spider_XHS](https://github.com/cv-cat/Spider_XHS)、[xhscrawl](https://github.com/submato/xhscrawl) | 逆向签名、Cookie、扫码或第三方 API | 仅作技术认知，不复制进生产链路 | README 自身也提示风控严格、建议代理或承认封禁风险 |
-| [Beav](https://github.com/Jamailar/Beav) | 本地优先内容工作台，浏览器插件采集内容和评论，订阅博主并每日刷新 | 产品形态对标：采集、素材库、选题、口播、剪辑、复盘串成一条线 | 公开仓库未见完整采集实现；不能把宣传能力当作我们已具备的能力 |
+| XHS-Downloader 用户脚本 | 从页面 `__INITIAL_STATE__.user.notes._rawValue` 读取已加载笔记，拿 `noteId + xsecToken` 后生成完整链接 | 最接近安全路线；也证明了应读页面状态而不是无障碍树 | 自动滚动默认关闭；项目文档明确警告开启后可能被检测为自动化并导致风控或封禁 |
+| social-media-copilot | 浏览器插件 + 本地服务，在页面上下文调用 `/api/sns/web/v1/user_posted` 分页接口并做签名 | 架构值得参考：工作台做调度和存储，浏览器端做授权 adapter | 直接走平台接口和签名，能全量分页，但登录态、频率和封号风险不可忽略 |
+| Spider_XHS、xhscrawl | 逆向签名、Cookie、扫码或第三方 API | 仅作技术认知，不复制进生产链路 | README 自身也提示风控严格、建议代理或承认封禁风险 |
+| Beav | 本地优先内容工作台，浏览器插件采集内容和评论，订阅博主并每日刷新 | 产品形态对标：采集、素材库、选题、口播、剪辑、复盘串成一条线 | 公开仓库未见完整采集实现；不能把宣传能力当作我们已具备的能力 |
 | Selenium / DrissionPage 类方案 | 模拟浏览器、保存登录 profile、低速访问 | 说明“能做”不等于“适合每天自动跑” | 小红书 `robots.txt` 对所有 User-agent `Disallow: /`，登录态和 IP 风险仍在 |
 
 ## 采用方案
@@ -41,9 +41,75 @@
 - L2：独立浏览器扩展。用户明确点击“采集此账号”时才运行，继续读可见页面状态；扩展不后台静默运行，并加入频率限制和运行审计。
 - L3：官方接口、平台导出或可信第三方数据源。先独立评估数据口径、权限、稳定性、费用、供应商风险和账号归属，再决定是否接入。
 
+## 详情证据采集
+
+2026-10-20 新增单条详情书签，用于补齐 Inbox 信号的核心证据：
+
+1. 用户先从 Inbox 打开该信号的原笔记链接，人工停在详情页。
+2. 点击这条信号对应的“补详情书签”。
+3. 书签校验当前 URL 的 noteId 与信号一致，只读取当前页面可见状态，提交标题、作者、正文、封面、媒体清单、发布时间、互动数、原始可见文本和逐字稿状态。
+4. 原始提交完整进入 `rawSnapshots`，结构化字段只增量补齐信号，不覆盖人工判断备注。
+5. 媒体默认只记录 URL 和类型，不下载；发现字幕文件 URL 也只记录说明，不伪装成已取得逐字稿。
+6. 逐字稿状态不伪造：`captured` 表示拿到文本；`missing` 表示当前可见范围未暴露；`blocked` 表示登录墙或风控限制导致不可读；`failed` 表示用户显式触发的本地转写运行失败，可重试。
+
+详情书签仍然不做自动滚动、私有接口、签名、验证码、代理或指纹伪装。若遇到真实滑块或安全验证，用户可以人工处理后重新点击；工作台记录不会把受阻页面伪装成成功。
+
+### 2026-10-20 真实游客态验证
+
+以一个匿名样本为对象验证：真实 Chrome Guest 的主页可见列表能读到目标笔记标题和当前会话 `xsecToken`，但该卡片的 `noteId` 为空、DOM 链接为 `/explore/`；关闭登录弹窗后自然点击也只弹出登录推荐，不发生详情路由。用旧链接中的 noteId 组合当前卡片 token 打开详情时，平台返回 `300017 安全限制 / 访问链接异常`，未出现滑块或人机验证。
+
+在该真实 `300017` 页面执行工作台生成的“补详情书签”后，Chrome 到 `127.0.0.1:5177` 的跨源请求成功，服务端生成 `browser-detail-assisted` raw snapshot，并把正文、封面、媒体清单和逐字稿如实标为 blocked；信号保留旧链接，不采集无关推荐内容。成功详情采集会回写可用详情 URL，blocked 重定向不会覆盖旧链接。
+
+### 2026-10-21 真实可读详情验证
+
+Chrome 155 的 Private Network Access 会拦截 HTTPS 小红书页面直接 POST 到 `127.0.0.1:5177`。现在由 `app/capture-bridge.html` 承担本地桥接：详情书签只向受约束的本地 bridge 窗口发送 `postMessage`，bridge 在本地源内向工作台 API 提交；不关闭 Chrome 安全开关，不保存用户 Cookie。
+
+用户提供的 4 条分享链接均在真实 Chrome Guest 中可读，未出现滑块、人机验证或安全验证页。执行详情书签后，标题、正文、封面、媒体清单、原始可见文本、raw snapshot 和证据包全部回传成功；可用详情 URL 会回写为当前 `/explore/:id` 形态。
+
+| 匿名样本 | 正文 | 媒体清单项 | 逐字稿 |
+|---|---:|---:|---|
+| 样本 A | 355 字 | 17 | captured（本地 ASR：1,995 字 / 55 段） |
+| 样本 B | 264 字 | 14 | captured（本地 ASR：1,456 字 / 155 段） |
+| 样本 C | 128 字 | 11 | captured（本地 ASR：1,665 字 / 100 段） |
+| 样本 D | 99 字 | 11 | captured（本地 ASR：894 字 / 77 段） |
+
+媒体清单只记录 URL、类型和 `not-downloaded` 状态；清单项包含主图、预览、视频与备用 CDN 地址，不代表去重后的素材数。初次详情采集时，4 个证据包均生成 `meta.json`、raw signal / snapshot、candidate excerpt、media manifest 与 `checksums.sha256`，各 5 条哈希逐项校验通过；下述本地 ASR 完成后，样本 A 的证据包增加第 6 条哈希。
+
+### 2026-10-21 本地 ASR 逐字稿验收
+
+用户在 Inbox 对 4 条详情逐条显式触发逐字稿动作后，工作台每次只下载该信号的一个完整 MP4，拒绝 `.m4s` 分片，用 ffmpeg 转成 16 kHz mono WAV，再调用本机 faster-whisper small int8 CPU 模型。来源均为 `local-asr:faster-whisper-small-int8-cpu`。
+
+| 匿名样本 | 全文 | 片段 | 时长 | ASR artifact |
+|---|---|---:|---:|---|
+| 样本 A | 1,995 字 | 55 | 260.851 秒 | 本地 `transcript.json` |
+| 样本 B | 1,456 字 | 155 | 203.475 秒 | 本地 `transcript.json` |
+| 样本 C | 1,665 字 | 100 | 234.984 秒 | 本地 `transcript.json` |
+| 样本 D | 894 字 | 77 | 165.674 秒 | 本地 `transcript.json` |
+
+4 个证据包均重建出 `candidate/transcript.md`，`checksums.sha256` 均为 6 条并逐项重算匹配；正文段与主数据完全一致，时间轴行数等于片段数，人工核对状态均保持 `unverified`。ASR 结果是候选逐字稿，同音字、标点和术语必须经人工校对后才能作为生产引用。
+
+### 2026-10-21 主页游客态 blocked 快照验证
+
+Chrome PNA bridge 已同时服务主页书签和详情书签：主页书签把 `workbench-profile-capture` 消息发给本地 bridge，bridge 再提交到工作台 API。书签读取 Vue ref 解包后的页面状态，保存主页总数、粉丝数、赞藏数、封面、标题、互动和时间等当前可见信息；当卡片缺少 `id` / `noteCard.noteId` 时，该卡片进入 `blockedItems`，不伪造笔记 URL，也不进入 Inbox。
+
+4 个新增匿名样本均在真实 Chrome Guest 主页完成验证，过程未遇到滑块或人机验证：
+
+每个样本的主页显示笔记数均为百量级；首屏可见 12 条，其中缺少 `noteId` 的为 12 条，进入 Inbox 的为 0 条。
+
+这 4 次运行均保存 raw snapshot 并把 coverage 标为 `blocked`；每个样本的 `collectedCount: 1` 只来自用户先前提供的单条详情信号，不代表主页列表已入库。当前结论不是页面没加载，而是游客态主页卡片本身不暴露可打开的笔记 ID，因此继续滚动不能解决 `note-id-unavailable`。
+
+安全边界保持不变：不绕登录墙、不处理验证码、不调用私有接口、不生成签名、不使用代理或指纹伪装。用户想补某条笔记的正文、封面、媒体清单或逐字稿状态时，从 App 分享这条笔记的链接；工作台用已有详情书签在真实游客态页面补证据。
+
+### 2026-10-21 游客态搜索字段验证
+
+按“用浏览器搜索字段反查具体笔记”的思路补充验证：游客首页的 `#search-input` 存在，但 placeholder 为“登录探索更多内容”；填入目标账号关键词和笔记标题并点击 `.search-icon` 后仍停留首页推荐流。再直接打开平台正常搜索结果 URL 做对照，页面可以路由到搜索标题，但正文显示“登录后查看搜索结果”，`__INITIAL_STATE__` 和 DOM 中目标笔记数均为 0；整个过程未出现滑块或人机验证。
+
+结论：游客态搜索能力同样受限，不能用搜索结果遍历主页 blocked 标题来补 `noteId + xsecToken`。不尝试登录墙绕过，后续仍以用户提供的单条 App 分享链接加详情书签作为补证据路线。
+
 ## 后续待验证
 
-- 在第一个小红书对标主页手动滚动后测试页面状态中可见的完整数量。
-- 验证页面状态生成的详情链接是否能正常打开。
-- 验证 HTTPS 页面直连 `127.0.0.1:5177` 在 Edge / Chrome 的 Private Network Access 行为。
+- 需要扩大某个样本时，先重新确认该样本当前游客态是否恢复 `noteId`；本轮 4 个样本的首屏 blocked 状态不能靠继续滚动解决。
+- 小红书页面自身暴露可见字幕的 `captured` 路径仍待真实验证；本轮已验证的是单条完整 MP4 加本地 ASR 路径。
+- 逐条人工校对 4 条本地 ASR 候选稿；当前 `unverified` 状态不能升级为已核对。
+- 验证 HTTPS 页面直连 `127.0.0.1:5177` 在 Edge 的 Private Network Access 行为；Chrome Guest 已通过 300017 blocked 页面真实书签验证。
 - 为每次运行记录 `loadedCount / importedCount / duplicateCount`，让“为什么少了”可解释。

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node scripts/server.mjs",
+    "build:ui": "node scripts/build-ui.mjs",
     "collect": "node scripts/collect-all.mjs",
     "test:chain": "node scripts/chain-regression.mjs",
     "setup-task": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-startup-task.ps1 -StartNow",
