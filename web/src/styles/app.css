@@ -825,6 +825,9 @@
     flex-direction: column;
     animation: slide var(--dur-panel) var(--ease-out);
   }
+  .sheet.wide {
+    width: min(740px, 100%);
+  }
   @media (max-width: 900px) {
     .sheet {
       width: 100%;
@@ -832,6 +835,11 @@
       border-left: 0;
       border-top: 1px solid var(--hairline);
       border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
+    }
+    .sheet.wide {
+      top: 0;
+      border-top: 0;
+      border-radius: 0;
     }
   }
   .sheet-head {
@@ -855,6 +863,161 @@
     display: flex;
     justify-content: flex-end;
     gap: var(--space-2);
+  }
+
+  /* ---------- Transcript reader ---------- */
+  .transcript-reader {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    min-width: 0;
+  }
+  .transcript-reader-head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+  .transcript-reader-title {
+    font-size: var(--text-xl);
+    font-weight: 600;
+    line-height: 26px;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+  }
+  .transcript-reader-source {
+    font-size: var(--text-sm);
+    line-height: 20px;
+    color: var(--action-ink);
+    overflow-wrap: anywhere;
+  }
+  .transcript-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    gap: 0;
+    padding: var(--space-3) 0;
+    border-top: 1px solid var(--hairline);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .transcript-meta > div {
+    min-width: 0;
+    padding: 0 var(--space-3);
+    border-left: 1px solid var(--hairline);
+  }
+  .transcript-meta > div:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .transcript-meta dt {
+    font-size: var(--text-2xs);
+    line-height: 16px;
+    color: var(--ink-subtle);
+  }
+  .transcript-meta dd {
+    margin: 2px 0 0;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    line-height: 20px;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+  .transcript-notice {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 10px var(--space-3);
+    border-left: 3px solid var(--candidate);
+    border-radius: 0 var(--radius-control) var(--radius-control) 0;
+    background: var(--candidate-soft);
+    color: var(--ink-muted);
+    font-size: var(--text-sm);
+    line-height: 20px;
+  }
+  .transcript-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .transcript-reader-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .transcript-full-text {
+    width: 100%;
+    max-width: 68ch;
+    margin: 0 auto;
+    font-size: var(--text-lg);
+    line-height: 1.85;
+    color: var(--ink);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .transcript-timeline {
+    width: 100%;
+    max-width: 72ch;
+    margin: 0 auto;
+  }
+  .transcript-timeline-item {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: var(--space-3) 0;
+    border-top: 1px solid var(--hairline);
+  }
+  .transcript-timeline-item:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+  .transcript-timestamp {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: 22px;
+    color: var(--ink-subtle);
+    font-variant-numeric: tabular-nums;
+  }
+  .transcript-timeline-item p {
+    min-width: 0;
+    line-height: 1.7;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+  @media (max-width: 900px) {
+    .transcript-meta {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .transcript-meta > div,
+    .transcript-meta > div:first-child {
+      padding: var(--space-2) var(--space-3);
+      border-left: 1px solid var(--hairline);
+      border-top: 1px solid var(--hairline);
+    }
+    .transcript-meta > div:nth-child(-n + 2) {
+      border-top: 0;
+    }
+    .transcript-meta > div:nth-child(odd) {
+      padding-left: 0;
+      border-left: 0;
+    }
+    .transcript-toolbar {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .transcript-reader-actions {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .transcript-reader-actions .btn {
+      width: 100%;
+      padding: 0 var(--space-2);
+    }
+    .transcript-timeline-item {
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--space-1);
+    }
   }
   @keyframes slide {
     from {

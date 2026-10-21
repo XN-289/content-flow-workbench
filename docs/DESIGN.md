@@ -1,6 +1,6 @@
 ---
 name: Content Flow Workbench
-version: 1.1.0
+version: 1.1.1
 updated: 2026-10-22
 product: 本地单人内容生产工作台（Windows 桌面形态，当前为 127.0.0.1 Web 壳）
 audience: 每天早上使用的单个内容创作者（非设计师、非团队、非营销官网）
@@ -254,6 +254,13 @@ icons:
 - 仅浮层使用阴影：`--shadow-overlay`。
 - Sheet 从右侧滑入 200ms；`prefers-reduced-motion` 时降级为淡入。
 - Toast 只承载「操作结果」，不承载状态；状态永远在它所属的对象旁边。
+
+### TranscriptReader（宽版 Sheet）
+- 已捕获的逐字稿必须可读，不能只停留在运行记录或状态 chip；入口文案固定为「查看逐字稿」。
+- 阅读器使用 `Sheet.size="wide"`：桌面 680–760px，移动端全屏；正文阅读宽度不超过 68ch。
+- 头部展示标题、来源、模型、媒体时长、字数、段数与生成时间；ASR 结果必须持续显示「unverified」与「ASR 候选稿，引用前需人工校对」。
+- 「全文 / 时间轴」是同一对象的两种视图，用 Segmented 切换；全文可复制，TXT / JSON 可下载。
+- 后台转写运行中必须显示当前阶段；失败保留可重试入口。轮询只刷新状态，不阻塞其他内容操作。
 
 ### 焦点与键盘
 - 焦点环：2px `--action` + 2px offset，任何主题下都必须可见。

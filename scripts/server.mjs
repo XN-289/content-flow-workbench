@@ -20,7 +20,12 @@ import {
 } from "./morning-pipeline.mjs";
 import { platformCapabilityRuntime } from "./platform-capabilities.mjs";
 import { resolveSourceIntakeUrl } from "./source-intake.mjs";
-import { applyTranscriptResult, resolveAsrRuntime, transcribeSignal } from "./transcribe-signal.mjs";
+import {
+  applyTranscriptResult,
+  createTranscriptRunId,
+  resolveAsrRuntime,
+  transcribeSignal
+} from "./transcribe-signal.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appDir = path.join(root, "app");
@@ -249,7 +254,72 @@ function enqueueStateMutation(operation) {
   return run;
 }
 
-async function runSignalTranscription(signalId, force = false) {
+async function updateTranscriptRunStage(runId, stage) {
+  await enqueueStateMutation(async () => {
+    const state = await readState();
+    const run = (state.transcriptRuns || []).find((item) => item.id === runId);
+    if (!run || run.status !== "running") return;
+    run.stage = stage;
+    run.updatedAt = new Date().toISOString();
+    await writeState(state, { backup: false });
+  });
+}
+
+async function persistBackgroundTranscriptFailure(signalId, runId, error) {
+  try {
+    await enqueueStateMutation(async () => {
+      const state = await readState();
+      const existingRun = (state.transcriptRuns || []).find((item) => item.id === runId);
+      const finishedAt = new Date().toISOString();
+      const message = String(error?.message || error || "后台转写失败").replace(/\s+/g, " ").trim().slice(0, 1000);
+      const result = {
+        ok: false,
+        error: message,
+        run: {
+          id: runId,
+          signalId,
+          startedAt: existingRun?.startedAt || finishedAt,
+          finishedAt,
+          status: "failed",
+          error: message,
+          nextAction: "检查本地 ASR 配置、媒体链接和 ffmpeg 后重试"
+        }
+      };
+      applyTranscriptResult(state, signalId, result);
+      await writeState(state, { backup: false });
+    });
+  } catch (persistError) {
+    console.error("Failed to persist background transcript failure:", persistError);
+  }
+}
+
+async function executeSignalTranscription(normalizedSignalId, force, transcriptRunId) {
+  const signal = await enqueueStateMutation(async () => {
+    const state = await readState();
+    const current = state.signals.find((item) => item.id === normalizedSignalId);
+    if (!current) throw new Error("signal not found");
+    return structuredClone(current);
+  });
+
+  // ASR can take minutes; keep it outside the global state mutation queue.
+  const result = await transcribeSignal(signal, {
+    root,
+    transcriptRoot,
+    asrRuntime: await resolveAsrRuntime(root),
+    force: force === true,
+    runId: transcriptRunId,
+    onProgress: (stage) => updateTranscriptRunStage(transcriptRunId, stage)
+  });
+  const persisted = await enqueueStateMutation(async () => {
+    const state = await readState();
+    const applied = applyTranscriptResult(state, normalizedSignalId, result);
+    await writeState(state);
+    return applied;
+  });
+  return { ...result, signal: persisted.signal };
+}
+
+async function runSignalTranscription(signalId, force = false, { background = false } = {}) {
   const normalizedSignalId = String(signalId || "").trim();
   if (!normalizedSignalId) throw new Error("signalId is required");
   if (runningTranscriptSignalIds.has(normalizedSignalId)) {
@@ -260,29 +330,50 @@ async function runSignalTranscription(signalId, force = false) {
 
   runningTranscriptSignalIds.add(normalizedSignalId);
   try {
-    const signal = await enqueueStateMutation(async () => {
-      const state = await readState();
-      const current = state.signals.find((item) => item.id === normalizedSignalId);
-      if (!current) throw new Error("signal not found");
-      return structuredClone(current);
-    });
+    const transcriptRunId = createTranscriptRunId();
+    if (background) {
+      const placeholder = await enqueueStateMutation(async () => {
+        const state = await readState();
+        const signal = state.signals.find((item) => item.id === normalizedSignalId);
+        if (!signal) throw new Error("signal not found");
+        const startedAt = new Date().toISOString();
+        const run = {
+          id: transcriptRunId,
+          signalId: normalizedSignalId,
+          startedAt,
+          updatedAt: startedAt,
+          finishedAt: null,
+          status: "running",
+          stage: { id: "queued", label: "已排队，准备媒体" },
+          error: "",
+          nextAction: ""
+        };
+        state.transcriptRuns = [run, ...(state.transcriptRuns || [])].slice(0, 30);
+        if (signal.transcriptStatus !== "captured") {
+          signal.transcriptStatus = "running";
+          signal.transcriptNote = "本地逐字稿正在生成；可继续处理其他内容。";
+          signal.updatedAt = startedAt;
+        }
+        await writeState(state);
+        return run;
+      });
 
-    // ASR can take minutes; keep it outside the global state mutation queue.
-    const result = await transcribeSignal(signal, {
-      root,
-      transcriptRoot,
-      asrRuntime: await resolveAsrRuntime(root),
-      force: force === true
-    });
-    const persisted = await enqueueStateMutation(async () => {
-      const state = await readState();
-      const applied = applyTranscriptResult(state, normalizedSignalId, result);
-      await writeState(state);
-      return applied;
-    });
-    return { ...result, signal: persisted.signal };
+      const task = executeSignalTranscription(normalizedSignalId, force, transcriptRunId)
+        .catch((error) => persistBackgroundTranscriptFailure(normalizedSignalId, transcriptRunId, error))
+        .finally(() => runningTranscriptSignalIds.delete(normalizedSignalId));
+      void task;
+      return {
+        ok: true,
+        accepted: true,
+        background: true,
+        signalId: normalizedSignalId,
+        run: placeholder
+      };
+    }
+
+    return await executeSignalTranscription(normalizedSignalId, force, transcriptRunId);
   } finally {
-    runningTranscriptSignalIds.delete(normalizedSignalId);
+    if (!background) runningTranscriptSignalIds.delete(normalizedSignalId);
   }
 }
 
@@ -3052,12 +3143,17 @@ async function runMorningPipelineQueued() {
     }
 
     const run = await updateMorningPipelineRecord(runId, () => {}, { final: true });
+    const operationResult = (name) => ({
+      ...(operationResults[name] && typeof operationResults[name] === "object" ? operationResults[name] : {}),
+      status: run.operations?.[name]?.status || "unknown"
+    });
     return {
-      ok: run.status === "ok",
+      ok: true,
+      completed: true,
       run,
-      dropFolder: operationResults.dropFolder,
-      collection: operationResults.collection,
-      agentResults: operationResults.agentResults
+      dropFolder: operationResult("dropFolder"),
+      collection: operationResult("collection"),
+      agentResults: operationResult("agentResults")
     };
   } finally {
     morningPipelineBusy = false;
@@ -3340,7 +3436,9 @@ async function handleApi(request, response, pathname) {
     }
 
     if (pathname === "/api/signals/transcript") {
-      const result = await runSignalTranscription(body.signalId, body.force === true);
+      const result = await runSignalTranscription(body.signalId, body.force === true, {
+        background: body.background === true
+      });
       return sendJson(response, 200, result, request);
     }
 

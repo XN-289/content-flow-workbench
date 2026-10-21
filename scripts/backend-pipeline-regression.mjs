@@ -268,6 +268,7 @@ async function main() {
   const morning = await morningRequest;
   equal(morning.status, 200, "morning pipeline HTTP status");
   equal(morning.payload.ok, true, "morning pipeline ok for successful automatic-only run");
+  equal(morning.payload.completed, true, "morning pipeline reports completed orchestration");
   equal(morning.payload.collection.total, 1, "morning pipeline runs only the due automatic source");
   current = (await requestJson(base, "/api/state", null, "GET")).payload;
   equal(current.collectionRuns.length, 2, "morning pipeline records one automatic collection run");
@@ -279,6 +280,23 @@ async function main() {
   equal(current.morningPipelineRuns[0].operations.collection.status, "ok", "morning pipeline collection status");
   equal(current.morningPipelineRuns[0].operations.dropFolder.status, "ok", "morning pipeline drop status");
   equal(current.morningPipelineRuns[0].operations.agentResults.status, "ok", "morning pipeline agent status");
+
+  const disableAutomation = await requestJson(base, "/api/automation/settings", { automationEnabled: false });
+  equal(disableAutomation.status, 200, "disable automation HTTP status");
+  equal(disableAutomation.payload.ok, true, "disable automation response");
+
+  const skippedMorning = await requestJson(base, "/api/morning-pipeline/run", {});
+  equal(skippedMorning.status, 200, "skipped morning pipeline HTTP status");
+  equal(skippedMorning.payload.ok, true, "skipped morning pipeline request flag");
+  equal(skippedMorning.payload.completed, true, "skipped morning pipeline completed flag");
+  equal(skippedMorning.payload.run.status, "skipped", "skipped morning pipeline aggregate status");
+  equal(skippedMorning.payload.collection.status, "skipped", "skipped morning pipeline collection status");
+  equal(skippedMorning.payload.run.stages.length, 6, "skipped morning pipeline stage count");
+  equal(
+    skippedMorning.payload.run.stages.find((stage) => stage.id === "collection")?.status,
+    "skipped",
+    "skipped morning pipeline collection stage status"
+  );
 
   console.log("backend pipeline regression passed");
 }

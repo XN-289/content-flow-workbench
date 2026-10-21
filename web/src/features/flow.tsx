@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { DISPOSITION_LABEL, EVIDENCE_STATE_LABEL } from "../lib/constants";
 import { capabilityLabel, capabilityTone, fmtDate, fmtDateTime, platformLabel, toneForEvidence } from "../lib/format";
@@ -34,14 +34,58 @@ function topicDefaults(record: any) {
   };
 }
 
+function formatDurationSeconds(value: any): string {
+  const total = Math.max(0, Math.round(Number(value) || 0));
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function formatTranscriptTimestamp(value: any): string {
+  const totalMs = Math.max(0, Math.round((Number(value) || 0) * 1000));
+  const minutes = Math.floor(totalMs / 60000);
+  const seconds = Math.floor((totalMs % 60000) / 1000);
+  const milliseconds = totalMs % 1000;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(milliseconds).padStart(3, "0")}`;
+}
+
+function downloadTextFile(filename: string, content: string, type: string) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("浏览器未允许复制");
+}
+
 export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
-  const { state, mutate, busy, setView } = useStore();
+  const { state, mutate, busy, setView, notify, refresh } = useStore();
   const [filter, setFilter] = useState("inbox");
   const [sourceId, setSourceId] = useState<string | null>(null);
   const [verify, setVerify] = useState<any>(null);
   const [verifyNote, setVerifyNote] = useState("");
   const [verifyState, setVerifyState] = useState("verified");
   const [sheetError, setSheetError] = useState<string | null>(null);
+  const [transcriptSignalId, setTranscriptSignalId] = useState<string | null>(null);
+  const [transcriptMode, setTranscriptMode] = useState<"full" | "timeline">("full");
+  const seenTranscriptStatuses = useRef<Record<string, string>>({});
 
   const runtime = state?.runtime || {};
   const commandCenter = runtime.commandCenter || {};
@@ -60,10 +104,33 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
   const transcriptBySignal = useMemo(() => {
     const map: Record<string, any> = {};
     (state?.transcriptRuns || []).forEach((item: any) => {
-      map[item.signalId] = item;
+      const current = map[item.signalId];
+      const itemTime = String(item.startedAt || item.updatedAt || "");
+      const currentTime = String(current?.startedAt || current?.updatedAt || "");
+      if (!current || itemTime > currentTime) map[item.signalId] = item;
     });
     return map;
-  }, [state]);
+  }, [state?.transcriptRuns]);
+
+  useEffect(() => {
+    const runs: any[] = state?.transcriptRuns || [];
+    runs.forEach((run) => {
+      const previous = seenTranscriptStatuses.current[run.id];
+      if (previous === "running" && run.status !== "running") {
+        if (run.status === "captured") {
+          notify("逐字稿已完成，可以查看全文和时间轴", "success");
+        } else if (run.status === "failed") {
+          notify("逐字稿生成失败，可在信息流中重新转写", "danger");
+        }
+      }
+      seenTranscriptStatuses.current[run.id] = run.status;
+    });
+    if (!runs.some((run) => run.status === "running")) return;
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [state?.transcriptRuns, refresh, notify]);
 
   if (!state) return null;
 
@@ -73,9 +140,35 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
 
   const activeRecord = records.find((record) => record.sourceId === sourceId) || records[0];
   const activeSource = state.sources.find((source: any) => source.id === activeRecord?.sourceId);
+  const transcriptSignal = state.signals.find((signal: any) => signal.id === transcriptSignalId) || null;
+  const transcriptSource = transcriptSignal
+    ? state.sources.find((source: any) => source.id === transcriptSignal.sourceId)
+    : null;
+  const transcriptRun = transcriptSignal
+    ? state.transcriptRuns.find((run: any) => run.signalId === transcriptSignal.id && run.status === "captured") ||
+      transcriptBySignal[transcriptSignal.id] ||
+      null
+    : null;
+  const transcriptSegments: any[] = Array.isArray(transcriptSignal?.transcriptSegments)
+    ? transcriptSignal.transcriptSegments
+    : [];
+  const transcriptText = String(transcriptSignal?.transcriptText || "");
 
   const setDisposition = (signalId: string, disposition: string) =>
     mutate(`signal-${signalId}`, () => api.update("signals", signalId, { disposition, seen: true }), `已标记为${DISPOSITION_LABEL[disposition] || disposition}`);
+
+  const collectActiveSource = async () => {
+    const key = `collect-${activeRecord.sourceId}`;
+    const result = await mutate(key, () => api.collect(activeRecord.sourceId));
+    const run = result?.run || {};
+    if (run.status === "blocked") {
+      notify(run.failureReason || "采集需要人工动作", "warning");
+    } else if (run.status === "failed") {
+      notify(run.failureReason || "采集失败", "danger");
+    } else {
+      notify(run.created > 0 ? `采集完成，新增 ${run.created} 条` : "采集完成，没有新增内容", "success");
+    }
+  };
 
   const createTopic = (signal: any) =>
     mutate(
@@ -87,6 +180,86 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
       },
       "选题已创建"
     );
+
+  const openTranscript = (signal: any) => {
+    setTranscriptSignalId(signal.id);
+    setTranscriptMode("full");
+  };
+
+  const startTranscript = async (signal: any, force = false) => {
+    try {
+      const result = await mutate(
+        `transcript-${signal.id}`,
+        () => api.transcript(signal.id, force, true),
+        "已开始后台转写，可以继续处理其他内容"
+      );
+      if (result?.run?.id) seenTranscriptStatuses.current[result.run.id] = "running";
+    } catch {
+      // Store already surfaces the server's actionable error.
+    }
+  };
+
+  const copyTranscript = async () => {
+    if (!transcriptText) return;
+    try {
+      await copyText(transcriptText);
+      notify("逐字稿全文已复制", "success");
+    } catch (error: any) {
+      notify(error.message || "复制失败", "danger");
+    }
+  };
+
+  const downloadTranscriptTxt = () => {
+    if (!transcriptSignal) return;
+    const timeline = transcriptSegments.map((segment, index) => {
+      const start = segment.startTimestamp || formatTranscriptTimestamp(segment.start);
+      const end = segment.endTimestamp || formatTranscriptTimestamp(segment.end);
+      return `${index + 1}. [${start} - ${end}] ${segment.text || ""}`;
+    });
+    const content = [
+      transcriptSignal.title || "未命名内容",
+      `来源：${transcriptSource?.name || "未知来源"}`,
+      `来源链接：${transcriptSource?.url || ""}`,
+      `模型：${transcriptSignal.transcriptModel || transcriptRun?.model || "未标注"}`,
+      `媒体时长：${formatDurationSeconds(transcriptSignal.transcriptDurationSeconds || transcriptRun?.durationSeconds)}`,
+      `生成时间：${fmtDateTime(transcriptSignal.transcriptCapturedAt || transcriptRun?.finishedAt)}`,
+      "状态：ASR 候选稿（unverified），引用前需人工校对",
+      "",
+      "全文",
+      transcriptText,
+      "",
+      "时间轴",
+      ...(timeline.length ? timeline : ["无分段"])
+    ].join("\n");
+    downloadTextFile(`transcript-${transcriptSignal.id}.txt`, content, "text/plain;charset=utf-8");
+  };
+
+  const downloadTranscriptJson = () => {
+    if (!transcriptSignal) return;
+    const payload = {
+      schemaVersion: 1,
+      title: transcriptSignal.title || "",
+      source: {
+        id: transcriptSignal.sourceId || "",
+        name: transcriptSource?.name || "",
+        url: transcriptSource?.url || ""
+      },
+      transcript: {
+        status: "unverified",
+        text: transcriptText,
+        model: transcriptSignal.transcriptModel || transcriptRun?.model || "",
+        durationSeconds: transcriptSignal.transcriptDurationSeconds || transcriptRun?.durationSeconds || 0,
+        capturedAt: transcriptSignal.transcriptCapturedAt || transcriptRun?.finishedAt || "",
+        source: transcriptSignal.transcriptSource || "",
+        segments: transcriptSegments
+      }
+    };
+    downloadTextFile(
+      `transcript-${transcriptSignal.id}.json`,
+      JSON.stringify(payload, null, 2),
+      "application/json;charset=utf-8"
+    );
+  };
 
   const openVerify = (item: any) => {
     setSheetError(null);
@@ -163,9 +336,9 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                     <Button
                       small
                       disabled={busy === `collect-${activeRecord.sourceId}`}
-                      onClick={() => mutate(`collect-${activeRecord.sourceId}`, () => api.collect(activeRecord.sourceId), "已触发采集")}
+                      onClick={collectActiveSource}
                     >
-                      立即采集
+                      {activeRecord.collectionMethod === "browser-assisted" ? "检查采集条件" : "立即采集"}
                     </Button>
                     <Button small onClick={() => mutate("drop", () => api.dropFolderScan(), "投递箱已扫描")}>
                       扫描投递箱
@@ -236,6 +409,14 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                 {visibleSignals.slice(0, 40).map((signal: any, signalIndex: number) => {
                   const evidence = evidenceBySignal[signal.id];
                   const transcript = transcriptBySignal[signal.id];
+                  const hasCapturedTranscript =
+                    signal.transcriptStatus === "captured" && Boolean(String(signal.transcriptText || "").trim());
+                  const transcriptRunning =
+                    !hasCapturedTranscript && (signal.transcriptStatus === "running" || transcript?.status === "running");
+                  const transcriptFailed =
+                    !hasCapturedTranscript &&
+                    !transcriptRunning &&
+                    (signal.transcriptStatus === "failed" || transcript?.status === "failed");
                   // 「下一条该处理的」= 当前筛选下第一条仍待分诊的信号
                   const isNextSignal = signalIndex === 0 && signal.disposition === "inbox";
                   const source = state.sources.find((item: any) => item.id === signal.sourceId);
@@ -268,9 +449,9 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                         ) : (
                           <Chip tone="neutral">无证据包</Chip>
                         )}
-                        {transcript ? (
-                          <Chip tone={transcript.status === "failed" ? "danger" : "candidate"}>
-                            逐字稿 · {transcript.status === "failed" ? "失败" : "unverified"}
+                        {hasCapturedTranscript || transcriptRunning || transcriptFailed ? (
+                          <Chip tone={transcriptFailed ? "danger" : transcriptRunning ? "action" : "candidate"}>
+                            逐字稿 · {transcriptFailed ? "失败" : transcriptRunning ? "转写中" : "unverified"}
                           </Chip>
                         ) : null}
                       </div>
@@ -297,13 +478,27 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                             核对证据
                           </Button>
                         )}
-                        <Button
-                          small
-                          disabled={busy === `transcript-${signal.id}`}
-                          onClick={() => mutate(`transcript-${signal.id}`, () => api.transcript(signal.id), "已请求转写")}
-                        >
-                          转写媒体
-                        </Button>
+                        {hasCapturedTranscript ? (
+                          <Button small onClick={() => openTranscript(signal)}>
+                            查看逐字稿
+                          </Button>
+                        ) : transcriptRunning ? (
+                          <Button small disabled>
+                            转写中 · {transcript?.stage?.label || "准备中"}
+                          </Button>
+                        ) : (
+                          <Button
+                            small
+                            disabled={busy === `transcript-${signal.id}`}
+                            onClick={() => void startTranscript(signal, transcriptFailed)}
+                          >
+                            {busy === `transcript-${signal.id}`
+                              ? "正在提交"
+                              : transcriptFailed
+                                ? "重新转写"
+                                : "转写媒体"}
+                          </Button>
+                        )}
                       </div>
                     </div>
                   );
@@ -376,15 +571,42 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                     }
                   />
                 ))}
-                {state.transcriptRuns.slice(0, 4).map((item: any) => (
-                  <TimelineItem
-                    key={item.id}
-                    tone={item.status === "failed" ? "danger" : "candidate"}
-                    title={`逐字稿 · ${item.segmentCount ?? 0} 段`}
-                    meta={`${fmtDateTime(item.finishedAt)} · 耗时 ${item.durationSeconds ?? 0} 秒 · 待人工校对`}
-                    right={<Chip tone={item.status === "failed" ? "danger" : "candidate"}>{item.status === "failed" ? "失败" : "unverified"}</Chip>}
-                  />
-                ))}
+                {state.transcriptRuns.slice(0, 4).map((item: any) => {
+                  const signal = state.signals.find((candidate: any) => candidate.id === item.signalId);
+                  const canView =
+                    item.status === "captured" &&
+                    signal?.transcriptStatus === "captured" &&
+                    Boolean(String(signal?.transcriptText || "").trim());
+                  return (
+                    <TimelineItem
+                      key={item.id}
+                      tone={item.status === "failed" ? "danger" : item.status === "running" ? "action" : "candidate"}
+                      title={signal?.title ? `逐字稿 · ${signal.title}` : `逐字稿 · ${item.segmentCount ?? 0} 段`}
+                      meta={
+                        item.status === "running"
+                          ? `${fmtDateTime(item.startedAt)} · ${item.stage?.label || "准备中"}`
+                          : item.status === "failed"
+                            ? item.error || "转写失败"
+                            : `${item.segmentCount ?? 0} 段 · ${formatDurationSeconds(item.durationSeconds)} · 待人工校对`
+                      }
+                      right={
+                        canView && signal ? (
+                          <Button small onClick={() => openTranscript(signal)}>
+                            查看
+                          </Button>
+                        ) : item.status === "failed" && signal ? (
+                          <Button small onClick={() => void startTranscript(signal, true)}>
+                            重试
+                          </Button>
+                        ) : (
+                          <Chip tone={item.status === "running" ? "action" : "candidate"}>
+                            {item.status === "running" ? "转写中" : "unverified"}
+                          </Chip>
+                        )
+                      }
+                    />
+                  );
+                })}
               </div>
             </Card>
           </>
@@ -428,6 +650,116 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
               <textarea className="textarea" style={{ minHeight: 100 }} value={verifyNote} onChange={(e) => setVerifyNote(e.target.value)} />
             </Field>
           </>
+        ) : null}
+      </Sheet>
+
+      <Sheet
+        open={Boolean(transcriptSignal)}
+        title="逐字稿阅读器"
+        size="wide"
+        onClose={() => setTranscriptSignalId(null)}
+        footer={
+          <Button onClick={() => setTranscriptSignalId(null)}>
+            关闭
+          </Button>
+        }
+      >
+        {transcriptSignal ? (
+          <div className="transcript-reader">
+            <header className="transcript-reader-head">
+              <div className="stack" style={{ gap: 6 }}>
+                <h3 className="transcript-reader-title">{transcriptSignal.title}</h3>
+                {transcriptSource?.url ? (
+                  <a
+                    className="transcript-reader-source"
+                    href={transcriptSource.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={transcriptSource.url}
+                  >
+                    {transcriptSource.name || transcriptSource.url}
+                  </a>
+                ) : (
+                  <span className="transcript-reader-source">{transcriptSource?.name || "来源未登记"}</span>
+                )}
+              </div>
+              <dl className="transcript-meta">
+                <div>
+                  <dt>模型</dt>
+                  <dd>{transcriptSignal.transcriptModel || transcriptRun?.model || "未标注"}</dd>
+                </div>
+                <div>
+                  <dt>媒体时长</dt>
+                  <dd className="tabular">
+                    {formatDurationSeconds(transcriptSignal.transcriptDurationSeconds || transcriptRun?.durationSeconds)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>全文</dt>
+                  <dd className="tabular">{transcriptText.length} 字</dd>
+                </div>
+                <div>
+                  <dt>时间轴</dt>
+                  <dd className="tabular">{transcriptSegments.length} 段</dd>
+                </div>
+                <div>
+                  <dt>生成时间</dt>
+                  <dd>{fmtDateTime(transcriptSignal.transcriptCapturedAt || transcriptRun?.finishedAt)}</dd>
+                </div>
+              </dl>
+            </header>
+
+            <div className="transcript-notice" role="note">
+              <Chip tone="candidate">unverified</Chip>
+              <span>ASR 候选稿，引用前需人工校对。</span>
+            </div>
+
+            <div className="transcript-toolbar">
+              <Segmented
+                ariaLabel="逐字稿视图"
+                value={transcriptMode}
+                onChange={setTranscriptMode}
+                options={[
+                  { value: "full", label: "全文" },
+                  { value: "timeline", label: "时间轴" }
+                ]}
+              />
+              <div className="transcript-reader-actions">
+                <Button small disabled={!transcriptText} onClick={copyTranscript}>
+                  复制全文
+                </Button>
+                <Button small disabled={!transcriptText} onClick={downloadTranscriptTxt}>
+                  下载 TXT
+                </Button>
+                <Button small disabled={!transcriptText} onClick={downloadTranscriptJson}>
+                  下载 JSON
+                </Button>
+              </div>
+            </div>
+
+            {transcriptMode === "full" ? (
+              transcriptText ? (
+                <article className="transcript-full-text" aria-label="逐字稿全文">
+                  {transcriptText}
+                </article>
+              ) : (
+                <EmptyState text="这次运行没有可读取的逐字稿全文" />
+              )
+            ) : transcriptSegments.length ? (
+              <ol className="transcript-timeline" aria-label="逐字稿时间轴">
+                {transcriptSegments.map((segment: any, index: number) => (
+                  <li key={`${segment.start ?? index}-${index}`} className="transcript-timeline-item">
+                    <time className="transcript-timestamp">
+                      {segment.startTimestamp || formatTranscriptTimestamp(segment.start)}
+                    </time>
+                    <p>{segment.text || "本段没有识别文本"}</p>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <EmptyState text="这次运行没有可读取的时间轴分段" />
+            )}
+          </div>
         ) : null}
       </Sheet>
     </>

@@ -16,7 +16,7 @@ function now() {
   return new Date().toISOString();
 }
 
-function runId() {
+export function createTranscriptRunId() {
   return `transcript-${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
@@ -117,7 +117,7 @@ function runCommand(command, args, { timeoutMs = 15 * 60 * 1000 } = {}) {
   });
 }
 
-function failureResult({ signal, media, startedAt, error, runtime = {} }) {
+function failureResult({ signal, media, startedAt, error, runtime = {}, runId = createTranscriptRunId() }) {
   const finishedAt = now();
   return {
     ok: false,
@@ -129,7 +129,7 @@ function failureResult({ signal, media, startedAt, error, runtime = {} }) {
       ? "在 data/asr-runtime.local.json 配置本机 Python faster-whisper 包和已下载模型"
       : "检查媒体链接是否仍有效、ffmpeg 是否可用后重试",
     run: {
-      id: runId(),
+      id: runId,
       signalId: String(signal.id || ""),
       startedAt,
       finishedAt,
@@ -147,10 +147,15 @@ export async function transcribeSignal(signal, {
   transcriptRoot = path.join(root, "data", "transcripts"),
   asrRuntime = null,
   force = false,
-  timestamp = now()
+  timestamp = now(),
+  runId = createTranscriptRunId(),
+  onProgress = null
 } = {}) {
   const startedAt = timestamp;
-  if (!signal?.id) return failureResult({ signal: {}, media: null, startedAt, error: "signalId is required" });
+  const reportProgress = async (stage) => {
+    if (onProgress) await onProgress(stage);
+  };
+  if (!signal?.id) return failureResult({ signal: {}, media: null, startedAt, error: "signalId is required", runId });
   if (!force && signal.transcriptStatus === "captured" && String(signal.transcriptText || "").trim()) {
     return {
       ok: true,
@@ -158,7 +163,7 @@ export async function transcribeSignal(signal, {
       signalId: signal.id,
       reason: "这条信号已有真实逐字稿；如需覆盖请显式重新转写。",
       run: {
-        id: runId(),
+        id: runId,
         signalId: signal.id,
         startedAt,
         finishedAt: now(),
@@ -175,11 +180,13 @@ export async function transcribeSignal(signal, {
       signal,
       media: null,
       startedAt,
-      error: "媒体清单中没有可下载的完整 MP4；不使用 m4s 分片或正文冒充逐字稿。"
+      error: "媒体清单中没有可下载的完整 MP4；不使用 m4s 分片或正文冒充逐字稿。",
+      runId
     });
   }
 
   try {
+    await reportProgress({ id: "prepare", label: "准备媒体" });
     const runtime = asrRuntime || await resolveAsrRuntime(root);
     if (!runtime.packageDir || !runtime.modelPath) {
       throw new Error("本地 ASR 未配置：需要 Python faster-whisper 包目录和已下载模型目录。");
@@ -197,11 +204,13 @@ export async function transcribeSignal(signal, {
     const artifactPath = path.join(outputDir, "transcript.json");
 
     if (!await pathExists(mediaPath)) {
+      await reportProgress({ id: "download", label: "下载原始视频" });
       const tempMediaPath = `${mediaPath}.download`;
       await downloadMedia(media.url, tempMediaPath);
       await fs.rename(tempMediaPath, mediaPath);
     }
     if (!await pathExists(audioPath)) {
+      await reportProgress({ id: "audio", label: "提取转写音频" });
       const ffmpeg = await runCommand(runtime.ffmpegCommand, [
         "-y",
         "-i", mediaPath,
@@ -217,6 +226,7 @@ export async function transcribeSignal(signal, {
       }
     }
 
+    await reportProgress({ id: "asr", label: "本地 ASR 转写" });
     const pythonScript = path.join(moduleRoot, "scripts", "transcribe_audio.py");
     const asr = await runCommand(runtime.pythonCommand, [
       pythonScript,
@@ -230,6 +240,7 @@ export async function transcribeSignal(signal, {
       throw new Error(`本地 ASR 运行失败：${cleanError(asr.error || asr.stderr || asr.stdout || `exit ${asr.code}`)}`);
     }
 
+    await reportProgress({ id: "save", label: "整理全文与时间轴" });
     const artifact = JSON.parse(await fs.readFile(artifactPath, "utf8"));
     const transcriptText = String(artifact.transcript || "").trim().slice(0, maxTranscriptCharacters);
     const segments = (Array.isArray(artifact.segments) ? artifact.segments : []).slice(0, maxTranscriptSegments);
@@ -254,7 +265,7 @@ export async function transcribeSignal(signal, {
         transcriptCapturedAt: finishedAt
       },
       run: {
-        id: runId(),
+        id: runId,
         signalId: signal.id,
         startedAt,
         finishedAt,
@@ -270,7 +281,7 @@ export async function transcribeSignal(signal, {
       }
     };
   } catch (error) {
-    return failureResult({ signal, media, startedAt, error: cleanError(error) });
+    return failureResult({ signal, media, startedAt, error: cleanError(error), runtime: await resolveAsrRuntime(root).catch(() => ({})), runId });
   }
 }
 
@@ -288,6 +299,12 @@ export function applyTranscriptResult(state, signalId, result, timestamp = now()
     signal.updatedAt = timestamp;
   }
 
-  state.transcriptRuns = [result.run, ...(Array.isArray(state.transcriptRuns) ? state.transcriptRuns : [])].slice(0, 30);
+  const transcriptRuns = Array.isArray(state.transcriptRuns) ? state.transcriptRuns : [];
+  const existingIndex = transcriptRuns.findIndex((run) => run?.id === result.run?.id);
+  state.transcriptRuns = (
+    existingIndex >= 0
+      ? transcriptRuns.map((run, index) => (index === existingIndex ? result.run : run))
+      : [result.run, ...transcriptRuns]
+  ).slice(0, 30);
   return { signal, run: result.run };
 }

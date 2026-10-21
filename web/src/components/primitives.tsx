@@ -267,13 +267,15 @@ export function Sheet({
   title,
   onClose,
   children,
-  footer
+  footer,
+  size = "default"
 }: {
   open: boolean;
   title: string;
   onClose: () => void;
   children: React.ReactNode;
   footer?: React.ReactNode;
+  size?: "default" | "wide";
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -339,7 +341,7 @@ export function Sheet({
     <>
       <div className="sheet-backdrop" onClick={onClose} aria-hidden="true" />
       <aside
-        className="sheet"
+        className={`sheet ${size === "wide" ? "wide" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

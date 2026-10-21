@@ -37,7 +37,8 @@ export const api = {
   collect: (sourceId: string) => post("/api/collect", { sourceId }),
   capture: (text: string, sourceId?: string) => post("/api/capture", { text, sourceId }),
   sourceIntake: (text: string) => post("/api/source-intake", { text }),
-  transcript: (signalId: string, force = false) => post("/api/signals/transcript", { signalId, force }),
+  transcript: (signalId: string, force = false, background = false) =>
+    post("/api/signals/transcript", { signalId, force, background }),
   runMorningPipeline: () => post("/api/morning-pipeline/run"),
   automationTick: (force = false) => post("/api/automation/tick", { force }),
   automationSettings: (automationEnabled: boolean) => post("/api/automation/settings", { automationEnabled }),

@@ -69,10 +69,11 @@ const PIPELINE_STATUS_META: Record<string, { label: string; tone: Tone; summary:
   running: { label: "运行中", tone: "action", summary: "运行中" },
   waiting: { label: "等待", tone: "action", summary: "等待" },
   ready: { label: "就绪", tone: "action", summary: "就绪" },
+  skipped: { label: "已跳过", tone: "neutral", summary: "已跳过" },
   unknown: { label: "状态未知", tone: "neutral", summary: "状态未知" }
 };
 
-const PIPELINE_SUMMARY_ORDER = ["failed", "blocked", "attention", "running", "waiting", "ready", "unknown"] as const;
+const PIPELINE_SUMMARY_ORDER = ["failed", "blocked", "attention", "pending", "running", "waiting", "ready", "skipped", "unknown"] as const;
 
 function normalizePipelineStatus(status?: string): string {
   return status && PIPELINE_STATUS_META[status] ? status : "unknown";

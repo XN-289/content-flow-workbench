@@ -3,7 +3,7 @@
 // 构建完成后由 scripts/server.mjs 在 5177 端口与 API 一起托管。
 
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +13,10 @@ const webDir = path.join(root, "web");
 const appDir = path.join(root, "app");
 const distDir = path.join(appDir, "dist");
 const captureBridge = path.join(appDir, "capture-bridge.html");
+const normalizeLineEndings = (filePath) => {
+  const content = readFileSync(filePath, "utf8").replace(/\r\n?/g, "\n");
+  writeFileSync(filePath, content, "utf8");
+};
 
 // 直接调用本地 vite 的可执行入口，避免依赖 npx/cmd 启动（部分环境禁止 spawn .cmd）
 const viteBin = path.join(webDir, "node_modules", "vite", "bin", "vite.js");
@@ -36,6 +40,8 @@ if (!existsSync(path.join(distDir, "index.html"))) {
   process.exit(1);
 }
 copyFileSync(captureBridge, path.join(distDir, "capture-bridge.html"));
+normalizeLineEndings(path.join(distDir, "index.html"));
+normalizeLineEndings(path.join(distDir, "capture-bridge.html"));
 
 console.log("完成：app/dist");
 console.log("启动：npm start");

@@ -906,6 +906,38 @@ async function main() {
   equal(transcriptState.signals[0].transcriptStatus, "captured", "later failed ASR preserves captured status");
   equal(transcriptState.signals[0].transcriptText, "这是真实转写文本。", "later failed ASR preserves captured text");
   equal(transcriptState.transcriptRuns.length, 3, "transcript run retention count");
+  const replacementRunId = "transcript-replacement-run";
+  transcriptState.transcriptRuns.unshift({
+    id: replacementRunId,
+    signalId: "transcript-regression",
+    status: "running",
+    startedAt: "2026-10-22T00:00:00.000Z"
+  });
+  applyTranscriptResult(transcriptState, "transcript-regression", {
+    ok: true,
+    patch: {
+      transcriptStatus: "captured",
+      transcriptText: "这是真实转写文本。",
+      transcriptSegments: [{ start: 0, end: 1, text: "这是真实转写文本。" }]
+    },
+    run: {
+      id: replacementRunId,
+      signalId: "transcript-regression",
+      status: "captured",
+      startedAt: "2026-10-22T00:00:00.000Z",
+      finishedAt: "2026-10-22T00:00:02.000Z"
+    }
+  });
+  equal(
+    transcriptState.transcriptRuns.filter((run) => run.id === replacementRunId).length,
+    1,
+    "background transcript result replaces its running placeholder"
+  );
+  equal(
+    transcriptState.transcriptRuns.find((run) => run.id === replacementRunId).status,
+    "captured",
+    "background transcript placeholder final status"
+  );
   pass("本地 ASR 只在成功时升级 captured，失败不覆盖旧真实逐字稿");
 
   const transcriptEvidence = await createSignalEvidencePackage({
@@ -934,6 +966,40 @@ async function main() {
   equal(current.signals.find((signal) => signal.id === evidenceSignal.id).transcriptStatus, "failed", "transcript API persists failed status");
   equal(current.transcriptRuns.length, 1, "transcript API run persistence count");
   pass("单条信号转写 API 失败时保留可重试运行记录，不伪造成功");
+
+  const backgroundTranscript = await requestJson(base, "/api/signals/transcript", {
+    signalId: evidenceSignal.id,
+    force: true,
+    background: true
+  });
+  equal(backgroundTranscript.status, 200, "background transcript HTTP status");
+  equal(backgroundTranscript.payload.ok, true, "background transcript request flag");
+  equal(backgroundTranscript.payload.accepted, true, "background transcript accepted flag");
+  equal(backgroundTranscript.payload.background, true, "background transcript mode flag");
+  equal(backgroundTranscript.payload.run.status, "running", "background transcript running placeholder");
+  const backgroundRunId = backgroundTranscript.payload.run.id;
+  let backgroundFinalRun = null;
+  const backgroundDeadline = Date.now() + 10000;
+  while (Date.now() < backgroundDeadline) {
+    current = await state(base);
+    const matchingRuns = current.transcriptRuns.filter((run) => run.id === backgroundRunId);
+    equal(matchingRuns.length, 1, "background transcript run identity count while polling");
+    if (matchingRuns[0]?.status !== "running") {
+      backgroundFinalRun = matchingRuns[0];
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  truthy(backgroundFinalRun, "background transcript reaches terminal status");
+  equal(backgroundFinalRun.status, "failed", "unconfigured background transcript final status");
+  match(backgroundFinalRun.error, /本地 ASR 未配置/, "background transcript actionable failure");
+  current = await state(base);
+  equal(
+    current.transcriptRuns.filter((run) => run.id === backgroundRunId).length,
+    1,
+    "background transcript run persistence count"
+  );
+  pass("后台转写立即返回 running 占位，轮询到终态且不会重复插入运行记录");
 
   // A 200 HTML response is a failed collection, not a successful RSS import.
   const feedSource = (await api(base, "/api/import", {
@@ -1009,13 +1075,15 @@ async function main() {
 
   await fs.writeFile(path.join(dropDir, "morning-invalid.json"), "{}", "utf8");
   const firstMorningPipelineRun = await api(base, "/api/morning-pipeline/run", {});
-  equal(firstMorningPipelineRun.ok, false, "pending morning pipeline result flag");
+  equal(firstMorningPipelineRun.ok, true, "pending morning pipeline request flag");
+  equal(firstMorningPipelineRun.completed, true, "pending morning pipeline completed flag");
   equal(firstMorningPipelineRun.run.status, "pending", "pending morning pipeline aggregate status");
   equal(firstMorningPipelineRun.run.operations.dropFolder.status, "pending", "morning pipeline pending drop operation");
   equal(firstMorningPipelineRun.run.operations.collection.status, "skipped", "morning pipeline collection operation status");
   equal(firstMorningPipelineRun.collection.skipped, true, "morning pipeline disabled collection skip flag");
   const secondMorningPipelineRun = await api(base, "/api/morning-pipeline/run", {});
-  equal(secondMorningPipelineRun.ok, false, "failed morning pipeline result flag");
+  equal(secondMorningPipelineRun.ok, true, "failed morning pipeline request flag");
+  equal(secondMorningPipelineRun.completed, true, "failed morning pipeline completed flag");
   equal(secondMorningPipelineRun.run.status, "failed", "failed morning pipeline aggregate status");
   equal(secondMorningPipelineRun.run.operations.dropFolder.status, "failed", "morning pipeline failed drop operation");
   truthy(secondMorningPipelineRun.run.finishedAt, "morning pipeline finished timestamp");
