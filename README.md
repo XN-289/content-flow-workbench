@@ -56,7 +56,7 @@ npm run remove-task
 - `manual`、`platform-export`：记录 blocked 状态和下一步人工动作，不伪装成自动成功。
 - `drops/` 本地投递箱：`.json`、`.md`、`.txt` 放入后自动解析、去重、入库，成功进入 `processed/`，失败进入 `failed/`。
 
-信息流中的四平台能力矩阵只使用 `complete / partial / unsupported / unknown` 表达实际边界。公开笔记详情可保存标题、正文、3:4 封面、媒体清单、raw snapshot 和证据包；逐字稿优先使用页面可见字幕，没有字幕时只对用户显式选择的单条完整视频做本地 ASR。ASR 全文、时间轴和启发式流量分析始终标记 `unverified`，不能当作平台因果证明。
+信息流中的四平台能力矩阵只使用 `complete / partial / unsupported / unknown` 表达实际边界。公开笔记详情可保存标题、正文、3:4 封面、媒体清单、raw snapshot 和证据包；小红书封面经本地媒体网关还原为稳定地址并缓存，避免临时 CDN 地址过期。逐字稿优先使用页面可见字幕，没有字幕时只对用户显式选择的单条完整视频做本地 ASR。ASR 全文、时间轴和启发式流量分析始终标记 `unverified`，不能当作平台因果证明。
 
 ## 自动化调度与本地流水线
 

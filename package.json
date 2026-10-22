@@ -15,6 +15,7 @@
     "test:backend": "node scripts/backend-pipeline-regression.mjs",
     "test:sources": "node scripts/source-intake-regression.mjs",
     "test:batch": "node scripts/batch-intake-regression.mjs",
+    "test:media": "node scripts/platform-media-regression.mjs",
     "test:plugin": "node scripts/plugin-regression.mjs",
     "check:types": "node web/node_modules/typescript/bin/tsc --noEmit -p web/tsconfig.json",
     "sanitize:snapshots": "node scripts/sanitize-blocked-snapshots.mjs",

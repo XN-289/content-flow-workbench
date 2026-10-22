@@ -6,6 +6,7 @@ data/exports/
 data/raw/
 data/transcripts/
 data/backups/
+data/media/
 drops/*
 !drops/README.md
 bridge/*

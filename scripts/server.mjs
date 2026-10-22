@@ -28,6 +28,7 @@ import {
   operationStatusFromResult
 } from "./morning-pipeline.mjs";
 import { platformCapabilityRuntime } from "./platform-capabilities.mjs";
+import { createPlatformMediaCache } from "./platform-media.mjs";
 import { clearRuntimeLocator, publishRuntimeLocator } from "./runtime-locator.mjs";
 import { classifySourceIntakeUrl, resolveSourceIntakeUrl } from "./source-intake.mjs";
 import {
@@ -54,6 +55,9 @@ const cloudInboxRelativeDir = path.join("ContentFlowWorkbench", "Inbox");
 const bridgeRoot = process.env.BRIDGE_ROOT ? path.resolve(process.env.BRIDGE_ROOT) : path.join(root, "bridge");
 const evidenceRoot = process.env.EVIDENCE_DIR ? path.resolve(process.env.EVIDENCE_DIR) : path.join(root, "evidence");
 const transcriptRoot = process.env.TRANSCRIPT_DIR ? path.resolve(process.env.TRANSCRIPT_DIR) : path.join(root, "data", "transcripts");
+const mediaCacheDir = process.env.MEDIA_CACHE_DIR
+  ? path.resolve(process.env.MEDIA_CACHE_DIR)
+  : path.join(dataDir, "media", "covers");
 const agentBridgeOutboxDir = path.join(bridgeRoot, "outbox");
 const port = Number(process.env.PORT || 5177);
 let activePort = port;
@@ -69,6 +73,7 @@ let stateMutationQueue = Promise.resolve();
 const browserCaptureTokens = new Map();
 const dropFileStability = new Map();
 const maxRequestBodyBytes = 2 * 1024 * 1024;
+const platformMediaCache = createPlatformMediaCache({ cacheDir: mediaCacheDir });
 
 const agentOptions = new Set(["grok", "muse", "codex", "claude", "cursor"]);
 const agentTaskKinds = new Set(["research", "dissect", "outline", "script", "title", "platform-copy", "visual"]);
@@ -696,6 +701,30 @@ function sendJson(response, status, payload, request = null, headers = null) {
     ...(headers || (request ? corsHeaders(request) : {}))
   });
   response.end(body);
+}
+
+async function servePlatformCover(request, response) {
+  try {
+    const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+    const sourceUrl = requestUrl.searchParams.get("url") || "";
+    const media = await platformMediaCache.get(sourceUrl);
+    response.writeHead(200, {
+      "content-type": media.contentType,
+      "content-length": String(media.content.length),
+      "cache-control": "private, max-age=604800, immutable",
+      "x-content-type-options": "nosniff",
+      "x-cover-cache": media.cache,
+      ...corsHeaders(request)
+    });
+    return response.end(request.method === "HEAD" ? undefined : media.content);
+  } catch (error) {
+    return sendJson(
+      response,
+      Number(error.status) || 502,
+      { ok: false, error: error.message || "cover unavailable" },
+      request
+    );
+  }
 }
 
 class RequestBodyError extends Error {
@@ -4144,6 +4173,10 @@ async function handleApi(request, response, pathname) {
 
   if (request.method === "GET" && pathname === "/api/backups") {
     return sendJson(response, 200, { ok: true, ...(await listBackups()) }, request);
+  }
+
+  if ((request.method === "GET" || request.method === "HEAD") && pathname === "/api/media/cover") {
+    return servePlatformCover(request, response);
   }
 
   if (request.method !== "POST") return sendJson(response, 405, { error: "method not allowed" }, request);

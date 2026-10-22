@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../lib/api";
+import { api, coverMediaUrl } from "../lib/api";
 import { DISPOSITION_LABEL, EVIDENCE_STATE_LABEL } from "../lib/constants";
 import { capabilityLabel, capabilityTone, fmtDate, fmtDateTime, platformLabel, toneForEvidence } from "../lib/format";
 import type { Tone, TranscriptAnalysisQuote } from "../lib/types";
@@ -118,17 +118,24 @@ function SignalCover({
   title?: string | null;
   variant?: "row" | "reader" | "preview";
 }) {
-  const [failed, setFailed] = useState(false);
-  if (!src || failed) return null;
+  const [attempt, setAttempt] = useState<"proxy" | "direct" | "failed">("proxy");
+  const proxiedSrc = coverMediaUrl(src);
+
+  useEffect(() => {
+    setAttempt("proxy");
+  }, [src]);
+
+  if (!src || attempt === "failed") return null;
+  const displaySrc = attempt === "proxy" && proxiedSrc !== src ? proxiedSrc : src;
   return (
     <img
       className={`signal-cover signal-cover--${variant}`}
-      src={src}
+      src={displaySrc}
       alt={`封面：${title || "未命名内容"}`}
       loading={variant === "reader" ? "eager" : "lazy"}
       decoding="async"
       referrerPolicy="no-referrer"
-      onError={() => setFailed(true)}
+      onError={() => setAttempt(attempt === "proxy" && proxiedSrc !== src ? "direct" : "failed")}
     />
   );
 }

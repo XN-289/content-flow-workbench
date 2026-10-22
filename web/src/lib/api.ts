@@ -74,6 +74,12 @@ export const api = {
   importState: (payload: any) => post("/api/import", payload)
 };
 
+export function coverMediaUrl(value?: string | null): string {
+  const source = String(value || "").trim();
+  if (!/^https?:\/\//i.test(source)) return source;
+  return `/api/media/cover?url=${encodeURIComponent(source)}`;
+}
+
 export function isLocalRehearsal(url?: string): boolean {
   return Boolean(url && url.startsWith("workbench://local-rehearsal"));
 }

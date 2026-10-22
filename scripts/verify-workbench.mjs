@@ -21,6 +21,11 @@ const steps = [
     args: ["--check", "plugin/content-flow-workbench/client.mjs"],
   },
   {
+    name: "platform media syntax",
+    command: process.execPath,
+    args: ["--check", "scripts/platform-media.mjs"],
+  },
+  {
     name: "main chain",
     command: process.execPath,
     args: ["scripts/chain-regression.mjs"],
@@ -39,6 +44,11 @@ const steps = [
     name: "batch intake",
     command: process.execPath,
     args: ["scripts/batch-intake-regression.mjs"],
+  },
+  {
+    name: "platform media",
+    command: process.execPath,
+    args: ["scripts/platform-media-regression.mjs"],
   },
   {
     name: "Bilibili public transcript",
