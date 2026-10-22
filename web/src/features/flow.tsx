@@ -93,6 +93,25 @@ function formatPublishedDate(value: any): string {
   }).format(date);
 }
 
+function accountWatchTone(record: any): Tone {
+  const status = record?.accountWatch?.refreshStatus;
+  if (status === "refresh-blocked" || status === "refresh-failed") return "danger";
+  if (status === "baseline-missing" || status === "refreshing") return "warning";
+  if (status === "current") return "success";
+  return "neutral";
+}
+
+function accountWatchStatusLabel(record: any): string {
+  const watch = record?.accountWatch;
+  if (watch?.refreshStatus === "refresh-blocked") return "刷新受阻";
+  if (watch?.refreshStatus === "refresh-failed") return "刷新失败";
+  if (watch?.refreshStatus === "refreshing") return "刷新中";
+  if (watch?.refreshStatus === "baseline-missing") return "待基线";
+  if (watch?.todayNewCount > 0) return `新 ${watch.todayNewCount}`;
+  if (watch?.refreshStatus === "current") return `已同步 ${watch.itemCount || 0}`;
+  return "未同步";
+}
+
 function AnalysisQuoteView({ quote }: { quote?: TranscriptAnalysisQuote | null }) {
   if (!quote) return null;
   return (
@@ -286,6 +305,9 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
 
   const activeRecord = records.find((record) => record.sourceId === sourceId) || records[0];
   const activeSource = state.sources.find((source: any) => source.id === activeRecord?.sourceId);
+  const watchedItems: any[] = activeRecord?.accountWatch?.items?.length
+    ? activeRecord.accountWatch.items
+    : activeRecord?.blockedPreviews || [];
   const canCaptureProfile = canCaptureXhsProfile(activeSource, runtime);
   const selectedCapabilityPlatform =
     capabilityPlatforms.find((platform: any) => platform.id === capabilityPlatformId) || capabilityPlatforms[0] || null;
@@ -312,14 +334,40 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
 
   const collectActiveSource = async () => {
     const key = `collect-${activeRecord.sourceId}`;
-    const result = await mutate(key, () => api.collect(activeRecord.sourceId));
-    const run = result?.run || {};
-    if (run.status === "blocked") {
-      notify(run.failureReason || "采集需要人工动作", "warning");
-    } else if (run.status === "failed") {
-      notify(run.failureReason || "采集失败", "danger");
+    const isAccountWatch = Boolean(activeRecord.accountWatch);
+    const result = await mutate(
+      key,
+      () => isAccountWatch
+        ? api.refreshAccounts(activeRecord.sourceId)
+        : api.collect(activeRecord.sourceId)
+    );
+    if (!isAccountWatch) {
+      const run = result?.run || {};
+      if (run.status === "blocked") {
+        notify(run.failureReason || "采集需要人工动作", "warning");
+      } else if (run.status === "failed") {
+        notify(run.failureReason || "采集失败", "danger");
+      } else {
+        notify(run.created > 0 ? `采集完成，新增 ${run.created} 条` : "采集完成，没有新增内容", "success");
+      }
+      return;
+    }
+
+    const blocked = (result?.results || []).find((item: any) => item.status === "blocked");
+    const failed = (result?.results || []).find((item: any) => item.status === "failed");
+    if (blocked) {
+      notify(blocked.failureReason || "公开主页刷新受阻，上一份有效快照已保留", "warning");
+    } else if (failed) {
+      notify(failed.failureReason || "账号刷新失败", "danger");
+    } else if (result?.skipped) {
+      notify(result.reason || "账号刷新正在进行", "warning");
     } else {
-      notify(run.created > 0 ? `采集完成，新增 ${run.created} 条` : "采集完成，没有新增内容", "success");
+      notify(
+        result?.newPreviewCount > 0
+          ? `账号已刷新，今日新增 ${result.newPreviewCount} 条预览`
+          : "账号已刷新，没有发现新内容",
+        "success"
+      );
     }
   };
 
@@ -533,26 +581,43 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
   return (
     <>
       <Shell
-        queueLabel="对标账号"
+        queueLabel="账号更新"
         inspectorLabel="平台能力与证据"
         queue={
           <>
             <div className="card-head">
-              <h2 className="card-title">对标账号</h2>
+              <h2 className="card-title">账号更新</h2>
               <span className="card-sub">{state.sources.length} 个</span>
             </div>
             <div className="queue">
               {records.map((record) => {
                 const coverageStatus = record.coverage?.status;
-                const tone = coverageStatus === "blocked" ? "danger" : record.controlStatus === "manual" ? "warning" : "success";
+                const hasAccountWatch = Boolean(record.accountWatch);
+                const tone = hasAccountWatch
+                  ? accountWatchTone(record)
+                  : coverageStatus === "blocked" ? "danger" : record.controlStatus === "manual" ? "warning" : "success";
+                const watch = record.accountWatch || {};
+                const meta = hasAccountWatch
+                  ? `${platformLabel(record.platform)} · ${
+                    watch.todayNewCount > 0
+                      ? `今日 ${watch.todayNewCount} 条新预览`
+                      : `${watch.itemCount || 0} 条可见`
+                  }`
+                  : `${platformLabel(record.platform)} · ${record.coverage?.collectedCount ?? 0}/${record.coverage?.totalNotes ?? "?"} 已采集`;
                 return (
                   <QueueRow
                     key={record.sourceId}
                     selected={record.sourceId === activeRecord?.sourceId}
                     tone={tone}
                     title={record.name}
-                    meta={`${platformLabel(record.platform)} · ${record.coverage?.collectedCount ?? 0}/${record.coverage?.totalNotes ?? "?"} 已采集`}
-                    right={<Chip tone={tone}>{coverageStatus === "blocked" ? "受阻" : record.controlStatus === "manual" ? "待人工" : "正常"}</Chip>}
+                    meta={meta}
+                    right={
+                      <Chip tone={tone}>
+                        {hasAccountWatch
+                          ? accountWatchStatusLabel(record)
+                          : coverageStatus === "blocked" ? "受阻" : record.controlStatus === "manual" ? "待人工" : "正常"}
+                      </Chip>
+                    }
                     onClick={() => {
                       setSourceId(record.sourceId);
                       if (capabilityPlatforms.some((platform: any) => platform.id === record.platform)) {
@@ -648,7 +713,7 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                       disabled={busy === `collect-${activeRecord.sourceId}`}
                       onClick={collectActiveSource}
                     >
-                      {activeRecord.collectionMethod === "browser-assisted" ? "检查采集条件" : "立即采集"}
+                      {activeRecord.accountWatch ? "刷新账号" : activeRecord.collectionMethod === "browser-assisted" ? "检查采集条件" : "立即采集"}
                     </Button>
                     <Button small onClick={() => mutate("drop", () => api.dropFolderScan(), "投递箱已扫描")}>
                       扫描投递箱
@@ -680,6 +745,27 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                       <span className="subtle" style={{ fontSize: 12 }}>未登记主页链接</span>
                     </div>
                   )}
+                  {activeRecord.accountWatch ? (
+                    <div className="inline">
+                      <Chip tone={accountWatchTone(activeRecord)}>{accountWatchStatusLabel(activeRecord)}</Chip>
+                      <span className="subtle" style={{ fontSize: 12 }}>
+                        {activeRecord.accountWatch.lastSnapshotAt
+                          ? `上次有效快照 ${fmtDateTime(activeRecord.accountWatch.lastSnapshotAt)}`
+                          : "尚无有效快照"}
+                      </span>
+                      {activeRecord.accountWatch.todayNewCount > 0 ? (
+                        <span className="subtle" style={{ fontSize: 12 }}>
+                          今日 {activeRecord.accountWatch.todayNewCount} 条新预览
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {["refresh-blocked", "refresh-failed"].includes(activeRecord.accountWatch?.refreshStatus)
+                    && activeRecord.accountWatch?.latestRun?.failureReason ? (
+                      <p className="muted" style={{ fontSize: 12, lineHeight: "20px" }}>
+                        {activeRecord.accountWatch.latestRun.failureReason}
+                      </p>
+                    ) : null}
                   {canCaptureProfile ? (
                     <div className="inline">
                       <BookmarkletActions
@@ -695,9 +781,15 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                     </div>
                   ) : null}
                   <div className="inline">
-                    <Chip tone={activeRecord.coverage?.status === "blocked" ? "danger" : "success"}>
-                      覆盖率 {activeRecord.coverage?.percent ?? 0}%
-                    </Chip>
+                    {activeRecord.accountWatch ? (
+                      <Chip tone="neutral">
+                        已读 {activeRecord.coverage?.collectedCount ?? 0}/{activeRecord.coverage?.totalNotes || "?"}
+                      </Chip>
+                    ) : (
+                      <Chip tone={activeRecord.coverage?.status === "blocked" ? "danger" : "success"}>
+                        覆盖率 {activeRecord.coverage?.percent ?? 0}%
+                      </Chip>
+                    )}
                     {activeRecord.coverage?.blockedNoteCount ? <Chip tone="warning">{activeRecord.coverage.blockedNoteCount} 条受阻</Chip> : null}
                     {activeRecord.coverage?.identityStatus === "note-id-unavailable" ? <Chip tone="warning">缺 noteId</Chip> : null}
                   </div>
@@ -706,19 +798,19 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                       {activeRecord.nextAction}
                     </p>
                   ) : null}
-                  {activeRecord.blockedPreviews?.length ? (
-                    <section className="blocked-preview-panel" aria-label="游客态可见笔记预览">
+                  {watchedItems.length ? (
+                    <section className="blocked-preview-panel" aria-label="账号更新笔记">
                       <div className="blocked-preview-heading">
                         <div>
-                          <span className="section-label">游客态可见预览</span>
+                          <span className="section-label">最近可见笔记</span>
                           <p className="blocked-preview-note">
-                            标题与封面可读；noteId 被平台隐藏。正文和逐字稿需从 App 分享具体笔记链接后补采。
+                            有链接的笔记可进入原帖并继续逐字稿；游客态只隐藏 noteId 时，标题、简介和封面仍保留为选题预览。
                           </p>
                         </div>
-                        <span className="tabular subtle">{activeRecord.blockedPreviews.length} 条</span>
+                        <span className="tabular subtle">{watchedItems.length} 条</span>
                       </div>
                       <div className="blocked-preview-list">
-                        {activeRecord.blockedPreviews.map((preview: any, index: number) => (
+                        {watchedItems.map((preview: any, index: number) => (
                           <article
                             className="blocked-preview-item"
                             key={`${preview.coverUrl || preview.title || "preview"}-${index}`}
@@ -729,12 +821,31 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                               variant="preview"
                             />
                             <div className="blocked-preview-copy">
-                              <strong title={preview.title || "未命名笔记"}>
-                                {preview.title || "未命名笔记"}
-                              </strong>
+                              {preview.url ? (
+                                <a
+                                  className="watch-item-title"
+                                  href={preview.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title={preview.title || "打开原帖"}
+                                >
+                                  {preview.title || "未命名笔记"}
+                                </a>
+                              ) : (
+                                <strong title={preview.title || "未命名笔记"}>
+                                  {preview.title || "未命名笔记"}
+                                </strong>
+                              )}
+                              {preview.description ? (
+                                <p className="blocked-preview-description" title={preview.description}>
+                                  {preview.description}
+                                </p>
+                              ) : null}
                               <div className="blocked-preview-meta">
+                                {preview.isNew ? <Chip tone="action">新</Chip> : null}
                                 <span>{preview.engagement ? `赞 ${preview.engagement}` : "赞数未显示"}</span>
                                 <span>{formatPublishedDate(preview.publishedAt) || "日期未显示"}</span>
+                                {preview.previewOnly ? <span>仅预览</span> : null}
                               </div>
                             </div>
                           </article>

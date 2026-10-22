@@ -161,7 +161,7 @@ async function main() {
       collectionMethod: "browser-assisted",
       url: "https://www.xiaohongshu.com/user/profile/backend-regression",
       enabled: true,
-      checkFrequency: "daily",
+      checkFrequency: "on-demand",
       nextRunAt: dueAt
     }
   ];
@@ -297,6 +297,66 @@ async function main() {
     "skipped",
     "skipped morning pipeline collection stage status"
   );
+
+  const firstBrowserCapture = await requestJson(base, "/api/browser-capture", {
+    sourceId: "source-browser-assisted",
+    items: [
+      {
+        url: "https://www.xiaohongshu.com/explore/backend-metadata-keep",
+        title: "保留已有元数据",
+        contentText: "原始正文不能被后续重复导入覆盖。",
+        coverUrl: "https://sns-webpic-qc.xhscdn.com/backend-keep.jpg",
+        mediaItems: [{ type: "image", url: "https://sns-webpic-qc.xhscdn.com/backend-keep.jpg" }]
+      },
+      {
+        url: "https://www.xiaohongshu.com/explore/backend-metadata-fill",
+        title: "补齐缺失元数据"
+      }
+    ]
+  });
+  equal(firstBrowserCapture.status, 200, "first browser capture HTTP status");
+  equal(firstBrowserCapture.payload.run.created, 2, "first browser capture created count");
+
+  const secondBrowserCapture = await requestJson(base, "/api/browser-capture", {
+    sourceId: "source-browser-assisted",
+    items: [
+      {
+        url: "https://www.xiaohongshu.com/explore/backend-metadata-keep",
+        title: "不应覆盖标题",
+        contentText: "不应覆盖已有正文。",
+        coverUrl: "https://sns-webpic-qc.xhscdn.com/backend-replaced.jpg",
+        mediaItems: [{ type: "image", url: "https://sns-webpic-qc.xhscdn.com/backend-replaced.jpg" }]
+      },
+      {
+        url: "https://www.xiaohongshu.com/explore/backend-metadata-fill",
+        contentText: "补齐后的简介与正文。",
+        coverUrl: "https://sns-webpic-qc.xhscdn.com/backend-filled.jpg",
+        mediaItems: [{ type: "image", url: "https://sns-webpic-qc.xhscdn.com/backend-filled.jpg" }],
+        publishedAt: "2026-10-22T08:00:00.000Z"
+      }
+    ]
+  });
+  equal(secondBrowserCapture.status, 200, "second browser capture HTTP status");
+  equal(secondBrowserCapture.payload.run.created, 0, "second browser capture created no duplicates");
+  equal(secondBrowserCapture.payload.run.metadataEnriched, 1, "second browser capture enriches one signal");
+
+  current = (await requestJson(base, "/api/state", null, "GET")).payload;
+  const retainedSignal = current.signals.find((signal) => signal.url.endsWith("/backend-metadata-keep"));
+  const filledSignal = current.signals.find((signal) => signal.url.endsWith("/backend-metadata-fill"));
+  equal(retainedSignal.title, "保留已有元数据", "repeated capture retains existing title");
+  equal(retainedSignal.contentText, "原始正文不能被后续重复导入覆盖。", "repeated capture does not overwrite body");
+  equal(
+    retainedSignal.coverUrl,
+    "https://sns-webpic-qc.xhscdn.com/backend-keep.jpg",
+    "repeated capture does not overwrite cover"
+  );
+  equal(filledSignal.contentText, "补齐后的简介与正文。", "repeated capture fills missing body");
+  equal(
+    filledSignal.coverUrl,
+    "https://sns-webpic-qc.xhscdn.com/backend-filled.jpg",
+    "repeated capture fills missing cover"
+  );
+  equal(filledSignal.mediaItems.length, 1, "repeated capture fills missing media");
 
   console.log("backend pipeline regression passed");
 }

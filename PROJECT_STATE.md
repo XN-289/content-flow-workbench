@@ -1,11 +1,11 @@
 # PROJECT_STATE
 
-Updated: 2026-10-22 09:30
+Updated: 2026-10-22 16:17
 Current phase: release hardening
 
 ## 一句话现状
 
-已完成 Park 原型分析、North Star 路线图和本地工作台 MVP。当前成品由 React 19 + TypeScript + Vite 构建，`scripts/server.mjs` 在 5177 单端口同时托管 `app/dist` 与 `/api/**`；总览、信息流、工作流、系统分别使用 `/`、`/flow`、`/workflow`、`/system` 路径并支持刷新、深链和前进后退。服务端包含轻量调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面解析、多层身份去重、每日晨报、Agent 任务包与结果回流；采集指挥中心、统一结果信封、四平台能力矩阵、声明式能力边界、分层证据包、全文逐字稿、候选流量分析、Drive 知识导出、本地 Agent 插件和六段晨间流水线均已接入。主数据继续只保存在本机，真实账号、笔记、评论、媒体、证据、逐字稿和任务内容不进入 Git。
+已完成 Park 原型分析、North Star 路线图和本地工作台 MVP。当前成品由 React 19 + TypeScript + Vite 构建，`scripts/server.mjs` 在 5177 单端口同时托管 `app/dist` 与 `/api/**`；总览、信息流、工作流、系统分别使用 `/`、`/flow`、`/workflow`、`/system` 路径并支持刷新、深链和前进后退。服务端包含轻量调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面解析、小红书公开主页每日刷新、多层身份去重、每日晨报、Agent 任务包与结果回流；采集指挥中心、统一结果信封、四平台能力矩阵、声明式能力边界、分层证据包、全文逐字稿、候选流量分析、Drive 知识导出、本地 Agent 插件和六段晨间流水线均已接入。主数据继续只保存在本机，真实账号、笔记、评论、媒体、证据、逐字稿和任务内容不进入 Git。
 
 本轮参考 Postiz、Mixpost 和 LangChain social-media-agent 后，工作台从“表单优先”转向“行动优先”：总览提供每日优先队列和 3 条作品目标进度，信息流提供节奏条，工作流提供阶段漏斗，发布台账提供平台队列；hash 返回 / 前进路由与系统页移动端横向溢出已修复。总览已可一键运行晨间流水线，信息流已展示四平台安全能力矩阵。工作流进一步收敛为“当前选题主卡 → 阶段漏斗 → 制作与审核 / 发布 / 复盘三个折叠区 → 选题库与全局台账折叠区”：制作和发布默认收起，复盘默认展开，复盘内“稿件回看”再用二级折叠隐藏两版正文；阶段跳转会自动递归展开父级折叠区。桌面 1440×1000 页面高度从 5,248px 降到 3,202px，390×844 手机从 8,191px 降到 4,496px，375×812 小手机从 8,191px 降到 4,586px。第一条真实信号已完成到两版口播稿、三平台本地演练台账、复盘和摩擦记录的完整本地闭环；这轮未进行真实公开平台发布。
 
@@ -14,6 +14,8 @@ Current phase: release hardening
 2026-10-22 的发布加固已完成：晨间流水线先持久化 `running`，再逐段更新；六段聚合优先级固定为 `failed > blocked > pending > attention > running > skipped > ok`。后台自动调度只执行 `public-rss`、`public-page`，`manual`、`browser-assisted` 只进入人工队列；复盘保存改为事务，设置更新只允许 `inboxTime`、`inboxDailyLimit`。同日新增九个固定方法的本地 Agent 插件、全文 / 时间轴 / 候选分析阅读器、绑定完整逐字稿的 Agent 任务包和显式 Drive 知识导出；隔离浏览器验收确认四张真实封面、时间戳引文、完整 Agent 上下文和全部导出哈希。快速粘贴现已按链接意图进入批次入口，信息流常驻显示“最近链接入库”；正式真实数据验收覆盖六段流水线、平台矩阵、逐字稿和批次重复回显。
 
 2026-10-22 09:20 新增真实逐字稿隔离 E2E：用 Windows 中文 SAPI 和 ffmpeg 生成临时 MP4，预置到临时逐字稿目录后用不可访问的 CDN 地址作诱饵，实际执行后台 ffmpeg + faster-whisper；同一 run 原位完成并验证全文、时间轴、媒体 / JSON 落盘、证据包 SHA-256 匹配，以及候选分析的 `unverified` 和输入哈希复用。测试全程不读取或修改真实主数据，命令为 `npm run test:transcript:e2e`。
+
+2026-10-22 账号主页监控已接入真实主数据：7 个用户提供的小红书账号全部登记为每日监控，6 个账号有有效公开主页快照，共 66 条可见笔记；其中 58 条带公开封面地址（浏览器验收实际加载 42 张），8 条旧快照带可打开笔记链接，另有 1 个账号暂无有效快照。7 个账号的最新公开刷新均被小红书 `300012 IP 风险` 拒绝，工作台没有覆盖旧快照，也没有伪造链接或逐字稿。刷新失败、游客态预览和“切换可信网络后重试”均已在账号更新区可见。
 
 ## 已接受事实
 
@@ -26,6 +28,8 @@ Current phase: release hardening
 - 复盘保存已改为事务：复盘记录与选题推进到 `reviewed` 同成同败，写入失败时不留下半条记录；专项后端口径回归和 41/41 主链路回归均通过 — `scripts/server.mjs`、`scripts/backend-pipeline-regression.mjs`
 - 统一验收入口已实现：`npm run verify:workbench` 顺序执行 11 步，成功只打印逐项 `PASS`，失败才展开日志；本轮 41 项主链路、后端流水线、17 项信源登记、7 项批量采集、5 项插件协议、TypeScript、diff 与 UI 构建全部通过 — `scripts/verify-workbench.mjs`、`package.json`
 - 工作流首次操作路径已收敛：开选题直接选中新选题并进入 `/workflow`，证据包生成后自动打开核对区，当前选题主卡可直接编辑标题 / 核心观点 / 目标读者 / 最小可发布版本；`/api/record` 对无身份键的新记录返回导入后的对象。隔离 E2E 覆盖路由、`localStorage` 选题持久化、字段 trim、自动核对和 390px 无横向溢出 — `scripts/workflow-ux-regression.mjs`、`scripts/server.mjs`、`web/src/features/flow.tsx`、`web/src/features/workflow.tsx`
+- 小红书公开主页每日监控已接入：后台按到期档期读取游客可见主页，保存标题、简介、链接、封面和可见互动数据；首次快照只建基线，失败不覆盖最后有效快照，旧数字键 / 数组快照仍可恢复。当前 7 个源中 6 个有快照、66 条可见内容、58 条封面地址、8 条可打开链接 — `scripts/account-watch.mjs`、`scripts/xhs-public-profile.mjs`、`scripts/server.mjs`、`web/src/features/flow.tsx`
+- 账号监控的公开数据边界已显式建模：带 `noteId` 的内容可作为可打开笔记，缺少 `noteId` 的公开卡片只显示为游客态预览；`300012 IP 风险` 会保留旧快照并提示切换可信网络，不保存 Cookie、不调用私有接口、不绕验证 — `scripts/account-watch-regression.mjs`、`docs/DECISIONS.md`
 - 用户提供的 4 条小红书可读详情均完成真实游客态采集：每条均有正文、封面、媒体清单、raw snapshot 和证据包，初始页面逐字稿均标记为 missing，访问过程中未遇到人机验证；公开文档只保留匿名化后的方法与验收结论 — `docs/xhs-collection-research.md`、`docs/platform-capabilities.md`
 - 4 条真实信号完成本地 ASR 验收：每次显式选择一个完整视频、拒绝分段媒体，经 ffmpeg 与 faster-whisper small int8 CPU 生成 `captured` 候选稿；4 个证据包均含正文候选、时间轴和 SHA-256 清单，哈希重算匹配，证据状态保持 `unverified` — `scripts/transcribe-signal.mjs`、`scripts/transcribe_audio.py`、`scripts/evidence-package.mjs`
 - Chrome 155 的 Private Network Access 拦截已通过本地 bridge 解决：小红书详情书签向受约束的 `app/capture-bridge.html` 发送 `postMessage`，bridge 在本地源内调用工作台 API；未关闭浏览器安全开关，未使用用户登录态 — `app/capture-bridge.html`、`app/app.js`、`scripts/server.mjs`
@@ -178,6 +182,7 @@ Current phase: release hardening
 - 统一验收 — `npm run verify:workbench` — 11/11 步通过
 - 业务链路 — `npm run test:chain` — 41/41 通过
 - 真实逐字稿 E2E — `npm run test:transcript:e2e` — 4/4 通过；覆盖临时 SAPI / ffmpeg 媒体、真实 faster-whisper、异步 run 原位终态、全文与时间轴、证据包 SHA-256 和候选分析哈希复用
+- 账号监控回归 — `npm run test:account-watch` — 13/13 通过；覆盖首次基线、新增 / 消失 / 互动变化、旧快照兼容、封面身份去重、公开载荷清洗和失败不覆盖最后有效快照
 - 工作流 UX E2E — `npm run test:workflow:e2e` — 6/6 通过；覆盖新选题路由与 `localStorage` 持久化、主卡字段 trim、无身份键记录返回、证据核对自动打开和 390px 无横向溢出
 - 后端流水线 — `npm run test:backend` — 通过
 - 插件协议 — `npm run test:plugin` — 5/5 通过
@@ -190,6 +195,7 @@ Current phase: release hardening
 - 状态与导航 — 中文状态映射、受阻摘要、浏览器前进后退、主题三态与移动端检查 — 通过
 - 正式真实数据浏览器验收 — `work/ui-build-acceptance-20261022-0755/acceptance-result.json` — `ok: true`；真实运行 `morning-pipeline-2026-10-21-b0cba11a`，四平台矩阵为 4×7，10 张 blocked 封面加载成功，逐字稿为 894 字 / 77 段 / 18 条时间戳引文，Agent 状态为 `imported`；控制台、页面、网络错误均为 0，1440 / 390 无横向溢出
 - 批量链接重复入口验收 — `work/ui-batch-acceptance-20261022-0800/acceptance-result.json` — `ok: true`；批次 `intake-batch-2026-10-21-469846f9` 返回 `total 1 / duplicate 1 / captured 0 / registered 0`，1440 / 390 / 375 均持久显示“最近链接入库”和队列 `duplicate`
+- 账号更新浏览器验收 — `work/account-watch-acceptance-20261022/acceptance-result.json` — `ok: true`；覆盖 7 个账号、6 个有效快照、66 条可见内容、可打开链接、真实封面、空快照提示、刷新受阻、1440 / 390 / 375 三视口无横向溢出，控制台、页面与资源错误均为 0
 - 原生 Computer Use — 2026-10-22 07:22 再次初始化 `@oai/sky`，native pipe 仍不可用（`系统找不到指定的文件`）— 未宣称通过；同机浏览器交互使用 headful Playwright 真实驱动 Chrome，不需要用户登录或人机认证
 - 受限快照清洗 — `npm run sanitize:snapshots -- --dry-run` — 检查 5 个快照、58 条可见项，拟变更 0，确认现有 blocked 快照已符合字段白名单
 - 本轮运行证据 — 流水线 `morning-pipeline-2026-10-21-fcea03ba`；分析 `analysis-2026-10-21-a7c7614c`；Agent 任务 `agent-2026-10-21-cb24e4b0`；知识导出 `knowledge-2026-10-21-53b209d2`
@@ -197,7 +203,7 @@ Current phase: release hardening
 ## 未决问题
 
 - P1 — 本地演练没有独立 publication status，只能用 `published` 加原因说明 — 实现 — 已有明确文案兜底但语义易混淆 — 增加 `rehearsal` 状态并区分真实发布
-- P1 — 当前 7 个本地对标源中，4 个新增源为 blocked、1 个既有源为 missing、2 个源为 unknown，搜索摘要候选尚未经用户确认 — 用户 — 不阻塞本地信号分流和详情证据复核 — 用户确认候选优先级；需要补证据时提供具体笔记的 App 分享链接
+- P1 — 7 个小红书源均有公开主页快照或失败留痕，但最新刷新全部被 `300012 IP 风险` 拒绝；6 个源共保留 66 条可见内容，其中 58 条只有游客态预览、没有 `noteId` — 用户 / 平台边界 — 不阻塞账号内容浏览、选题和已有详情证据复核 — 在可信家庭网络重试公开刷新；需要详情或逐字稿时仍从 App 分享具体笔记
 - P1 — 用户最新提供的两条详情链接均被游客态 `300012 IP 风险` 拦截，本轮未生成标题、封面、正文或逐字稿 — 用户 / 平台边界 — 不阻塞已有 4 条逐字稿和分析 — 用户切换可靠网络或完成平台安全验证后重新打开详情，再继续补证据；工作台不换代理、不伪造设备、不绕验证
 - P0 — 40 天内优先讲清楚的三个主题未确认 — 用户 — 阻塞选题池初始化 — 用户给出三个主题
 - P0 — “连续出摊”的定义未确认 — 用户 — 阻塞今日页指标 — 用户定义计数规则
@@ -219,7 +225,7 @@ Current phase: release hardening
 ## 下一步
 
 1. 连续三个真实工作日从总览行动队列和“运行流水线”开始工作 — 验收标准：一键后能看清投递箱、采集、回流、晨报、Inbox 和生产块状态，不需要手工翻找入口也能判断下一步动作，重复卡点记录在复盘区近 3 天摩擦摘要中
-2. 在账号页刷新采集指挥中心，确认 4 个新增作者的 blocked 状态、可见数量、raw snapshot 和下一步动作 — 验收标准：用户能看出继续滚动不能解决 noteId 缺失；详情直达若返回 `300012`，由用户切换可靠网络或完成平台安全验证后重试
+2. 在账号页核对 7 个账号的可见内容、封面、可打开链接和刷新受阻状态 — 验收标准：用户能看出 66 条保留内容与最新刷新失败是两件事；需要新快照时切换可信网络重试，详情直达若仍返回 `300012`，继续保留旧快照而不是伪造链接
 3. 人工校对 4 条已生成逐字稿 — 验收标准：同音字、标点和术语完成人工修正，证据核对状态按结论更新；新笔记仍走 App 分享链接 + 详情书签 + 显式 ASR
 4. 将已复盘的高敏感选题推进为真实口播视频并人工发布 — 验收标准：录制 / 剪辑完成，至少一个主平台真实链接回填，公开数据只在平台可见后记录
 5. 用户用一条真实信号和一条真实热评各投一个文件到 `drops/` — 验证本地投递箱日常手感
@@ -254,10 +260,12 @@ Current phase: release hardening
 - 导入模板：`data/import-template.json`
 - 决策文件：`decisions.md`
 - 验证命令：`npm run verify:workbench`；需要单项定位时使用 `npm run test:chain`、`npm run test:backend`、`npm run test:sources`、`npm run test:batch`、`npm run test:plugin`、`npm run test:transcript:e2e`、`npm run check:types` 或 `npm run build:ui`
-- 当前运行态：5177 服务以 `AUTOMATION_ENABLED=false` 运行，后台采集暂停，真实主数据未被本轮验收改写
+- 当前运行态：验收服务运行于 `http://127.0.0.1:5181`，`AUTOMATION_ENABLED=true`；7 个小红书账号启用了每日公开主页刷新，最新一轮均被 `300012` 阻断，最后有效快照保留。默认安装入口仍为 5177
 - 已知坑：中文文本必须用 Node UTF-8 或显式 UTF-8 安全方式读取；不得用 bash 执行含 JavaScript 模板字符串的读取命令，错误 shell 会生成垃圾文件；Windows OCR 需要通过 `powershell.exe -File ...batch-ocr.ps1` 运行；原生 Computer Use native pipe 当前不可用，浏览器验收使用 headful Playwright；新克隆没有真实主数据，需要从私人备份恢复或重新导入；真实备份不进入 Git
 
 ## 最近更新
+
+- 2026-10-22 16:17 — 接入真实小红书账号每日监控 — 7 个账号全部进入公开主页刷新队列，6 个有效快照共恢复 66 条可见内容、58 条封面地址和 8 条可打开链接；新增账号更新区、新增 / 消失 / 互动变化和游客态预览边界；首次快照只建基线，刷新失败不覆盖旧快照；`npm run test:account-watch` 13/13、`npm run test:backend` 通过，浏览器验收 `ok: true`
 
 - 2026-10-22 09:30 — 收敛开选题与证据核对路径 — 信息流“开选题”直接选中新选题并进入 `/workflow`，证据包生成后自动打开核对区，当前选题主卡可直接编辑标题 / 核心观点 / 目标读者 / 最小可发布版本；`/api/record` 修复无身份键新记录的返回；新增隔离 `npm run test:workflow:e2e` 6/6，通过后 `npm run verify:workbench` 11/11；真实逐字稿 E2E 此前 4/4，未因本轮 UX-only 改动重跑
 

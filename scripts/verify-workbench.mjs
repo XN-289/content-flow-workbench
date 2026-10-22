@@ -41,6 +41,11 @@ const steps = [
     args: ["scripts/source-intake-regression.mjs"],
   },
   {
+    name: "account watch",
+    command: process.execPath,
+    args: ["scripts/account-watch-regression.mjs"],
+  },
+  {
     name: "batch intake",
     command: process.execPath,
     args: ["scripts/batch-intake-regression.mjs"],

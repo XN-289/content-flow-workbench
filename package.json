@@ -8,6 +8,7 @@
     "build:ui": "node scripts/build-ui.mjs",
     "collect": "node scripts/collect-all.mjs",
     "test:chain": "node scripts/chain-regression.mjs",
+    "test:account-watch": "node scripts/account-watch-regression.mjs",
     "test:transcript:e2e": "node scripts/transcript-e2e-regression.mjs",
     "test:transcript:intake": "node scripts/transcript-intake-regression.mjs",
     "test:bilibili": "node scripts/bilibili-public-regression.mjs",

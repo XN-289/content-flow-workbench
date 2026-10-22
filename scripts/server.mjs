@@ -32,12 +32,18 @@ import { createPlatformMediaCache } from "./platform-media.mjs";
 import { clearRuntimeLocator, publishRuntimeLocator } from "./runtime-locator.mjs";
 import { classifySourceIntakeUrl, resolveSourceIntakeUrl } from "./source-intake.mjs";
 import {
+  accountWatchRuntimeForSource,
+  buildAccountWatchRuntime,
+  isAccountWatchSource
+} from "./account-watch.mjs";
+import {
   applyTranscriptResult,
   createTranscriptRunId,
   resolveAsrRuntime,
   transcribeSignal
 } from "./transcribe-signal.mjs";
 import { captureXhsGuestNote } from "./xhs-guest-detail.mjs";
+import { refreshXhsProfileSources } from "./xhs-public-profile.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appDir = path.join(root, "app");
@@ -259,6 +265,17 @@ function failureDelay(failureCount) {
 
 function isScheduledSource(source) {
   return isScheduledCollectionSource(source);
+}
+
+function isAccountWatchDue(source, timestamp = Date.now()) {
+  const nextRunAt = Date.parse(String(source?.nextRunAt || ""));
+  return isAccountWatchSource(source)
+    && Number.isFinite(nextRunAt)
+    && nextRunAt <= Number(timestamp);
+}
+
+function nextAccountWatchRun(source, collectionTime, from = new Date()) {
+  return nextCollectionRun(source, collectionTime, from);
 }
 
 function prepareAutomationState(state) {
@@ -509,11 +526,17 @@ function latestBlockedPreviewsForSource(state, sourceId) {
   return [];
 }
 
-function sourceControlRecord(state, source, timestamp = Date.now()) {
+function sourceControlRecord(state, source, timestamp = Date.now(), accountWatch = null) {
   const latestRun = latestRunForSource(state, source.id);
   const automatic = isAutomaticCollectionCandidate(source);
   const scheduled = isScheduledSource(source);
   const due = isDue(source, timestamp);
+  const accountWatchEnabled = isAccountWatchSource(source);
+  const hasAccountWatchRun = source.lastRunTrigger === "account-watch"
+    || accountWatch?.latestRun?.trigger === "account-watch";
+  const watchStatus = accountWatchEnabled && hasAccountWatchRun
+    ? String(accountWatch?.refreshStatus || "")
+    : "";
   const nextRunTime = source.nextRunAt ? new Date(source.nextRunAt).getTime() : 0;
   const coolingDown = source.automationStatus === "retrying" && nextRunTime > timestamp;
   const failed = source.lastRunStatus === "failed" || latestRun?.status === "failed";
@@ -524,6 +547,11 @@ function sourceControlRecord(state, source, timestamp = Date.now()) {
 
   let controlStatus = "monitoring";
   if (source.enabled === false) controlStatus = "disabled";
+  else if (watchStatus === "refreshing") controlStatus = "running";
+  else if (watchStatus === "refresh-failed") controlStatus = "failed";
+  else if (watchStatus === "refresh-blocked") controlStatus = "manual";
+  else if (watchStatus === "baseline-missing") controlStatus = "due";
+  else if (watchStatus === "current") controlStatus = "monitoring";
   else if (source.automationStatus === "running") controlStatus = "running";
   else if (coolingDown) controlStatus = "cooldown";
   else if (failed) controlStatus = "failed";
@@ -536,16 +564,22 @@ function sourceControlRecord(state, source, timestamp = Date.now()) {
   let primaryAction = "wait";
   let nextAction = "";
   if (controlStatus === "running") {
-    nextAction = "等待当前采集完成，不要重复启动";
+    nextAction = watchStatus === "refreshing"
+      ? "正在按公开主页刷新，完成后会保留可打开笔记并更新预览列表"
+      : "等待当前采集完成，不要重复启动";
   } else if (controlStatus === "cooldown") {
     primaryAction = "inspect";
     nextAction = `冷却至 ${source.nextRunAt}；先检查上次失败原因，不要连续重试`;
   } else if (controlStatus === "failed") {
     primaryAction = "inspect";
-    nextAction = source.lastCollectionError || latestRun?.failureReason || "查看最近失败原因";
+    nextAction = watchStatus === "refresh-failed"
+      ? accountWatch?.latestRun?.nextAction || source.lastCollectionError || "公开主页刷新失败，旧快照已保留"
+      : source.lastCollectionError || latestRun?.failureReason || "查看最近失败原因";
   } else if (controlStatus === "manual") {
     primaryAction = source.collectionMethod === "platform-export" ? "import" : "capture";
-    nextAction = source.coverage?.status === "blocked"
+    nextAction = watchStatus === "refresh-blocked"
+      ? `${accountWatch?.latestRun?.nextAction || "公开主页刷新受阻"}；${accountWatch?.lastSnapshotAt ? `上一份有效快照 ${accountWatch.lastSnapshotAt}` : "暂无有效快照"}`
+      : source.coverage?.status === "blocked"
       ? `主页可见 ${source.coverage.lastLoadedCount || 0} 条，但 ${source.coverage.blockedNoteCount || 0} 条缺少可打开 noteId；请从 App 分享感兴趣笔记的链接，再由详情书签补证据`
       : source.collectionMethod === "platform-export"
       ? "导出平台数据后，用 JSON 导入或本地投递箱入库"
@@ -557,11 +591,15 @@ function sourceControlRecord(state, source, timestamp = Date.now()) {
       : "主页总数待确认；先手动滚动到目标范围，再点击采集书签";
   } else if (controlStatus === "due") {
     primaryAction = "run";
-    nextAction = "源已到期，立即运行一次公开采集";
+    nextAction = watchStatus === "baseline-missing"
+      ? "尚未取得有效主页快照；立即刷新公开主页建立监控基线"
+      : "源已到期，立即运行一次公开采集";
   } else if (controlStatus === "complete") {
     nextAction = `当前显示总数已覆盖 ${source.coverage.collectedCount}/${source.coverage.totalNotes}；后续按档期增量采集`;
   } else if (controlStatus === "monitoring") {
-    nextAction = automatic
+    nextAction = watchStatus === "current"
+      ? `账号监控已同步；今日 ${Number(accountWatch?.todayNewCount || 0)} 条新预览，${Number(accountWatch?.itemCount || 0)} 条可见；下次 ${source.nextRunAt || "待排程"}`
+      : automatic
       ? `下次自动检查：${source.nextRunAt || "待排程"}`
       : "已登记，按需运行";
   } else if (controlStatus === "on-demand") {
@@ -588,7 +626,23 @@ function sourceControlRecord(state, source, timestamp = Date.now()) {
     nextRunAt: source.nextRunAt || "",
     failureCount: Number(source.failureCount || 0),
     error: source.lastCollectionError || latestRun?.failureReason || "",
-    blockedPreviews: latestBlockedPreviewsForSource(state, source.id),
+    accountWatch: accountWatchEnabled ? accountWatch || null : null,
+    blockedPreviews: accountWatchEnabled && accountWatch?.items?.length
+      ? accountWatch.items
+          .filter((item) => item.previewOnly)
+          .map((item) => ({
+            title: item.title,
+            description: item.description,
+            engagement: item.engagement,
+            publishedAt: item.publishedAt,
+            coverUrl: item.coverUrl,
+            reason: item.reason || "note-id-unavailable",
+            isNew: item.isNew,
+            firstSeenAt: item.firstSeenAt,
+            lastSeenAt: item.lastSeenAt
+          }))
+          .slice(0, 50)
+      : latestBlockedPreviewsForSource(state, source.id),
     lastRun: latestRun ? {
       id: latestRun.id,
       status: latestRun.status,
@@ -621,10 +675,18 @@ function commandCenterRuntime(state, timestamp = Date.now()) {
     research: 9,
     disabled: 10
   };
+  const accountWatch = buildAccountWatchRuntime(state, { now: new Date(timestamp) });
   const records = (state.sources || [])
-    .map((source) => sourceControlRecord(state, source, timestamp))
+    .map((source) => sourceControlRecord(
+      state,
+      source,
+      timestamp,
+      accountWatch.bySource[source.id] || null
+    ))
     .sort((a, b) => (
-      (order[a.controlStatus] ?? 99) - (order[b.controlStatus] ?? 99)
+      Number(Boolean(b.accountWatch?.todayNewCount))
+      - Number(Boolean(a.accountWatch?.todayNewCount))
+      || (order[a.controlStatus] ?? 99) - (order[b.controlStatus] ?? 99)
       || String(a.name).localeCompare(String(b.name), "zh-CN")
     ));
   const counts = records.reduce((accumulator, record) => {
@@ -634,6 +696,7 @@ function commandCenterRuntime(state, timestamp = Date.now()) {
   return {
     generatedAt: new Date(timestamp).toISOString(),
     automationEnabled: automationEnabled(state),
+    accountWatch,
     counts,
     records
   };
@@ -641,6 +704,7 @@ function commandCenterRuntime(state, timestamp = Date.now()) {
 
 function runtimeState(state) {
   const envDisabled = ["false", "0", "off"].includes(String(process.env.AUTOMATION_ENABLED || "").toLowerCase());
+  const commandCenter = commandCenterRuntime(state);
   return {
     automation: {
       effectiveEnabled: automationEnabled(state),
@@ -648,14 +712,15 @@ function runtimeState(state) {
       pageEnabled: state.settings.automationEnabled !== false
     },
     browserCapture: browserCaptureRuntime(state),
-    commandCenter: commandCenterRuntime(state),
+    commandCenter,
     inbox: inboxFunnelRuntime(state),
     evidencePackages: createEvidenceRuntime(state),
     analysis: analysisRuntime(state),
     knowledgeExport: knowledgeExportRuntime(state),
     morningPipeline: morningPipelineRuntime(state, {
       automationEnabled: automationEnabled(state),
-      lastRun: state.morningPipelineRuns?.[0]
+      lastRun: state.morningPipelineRuns?.[0],
+      accountWatch: commandCenter.accountWatch
     }),
     platformCapabilities: platformCapabilityRuntime(state)
   };
@@ -1673,7 +1738,7 @@ function positiveCount(value) {
   return parsed !== null && parsed > 0 ? parsed : null;
 }
 
-function importBrowserCapture(state, sourceId, items, blockedItems = [], context = {}) {
+function importBrowserCapture(state, sourceId, items, blockedItems = [], context = {}, options = {}) {
   const source = state.sources.find((item) => item.id === sourceId);
   if (!source) throw new Error("source not found");
   if (source.collectionMethod !== "browser-assisted") {
@@ -1693,9 +1758,14 @@ function importBrowserCapture(state, sourceId, items, blockedItems = [], context
     return preview;
   });
 
-  const seen = new Set((state.signals || []).flatMap((signal) => signalIdentityKeys(signal)));
+  const existingSignalsByKey = new Map();
+  for (const signal of state.signals || []) {
+    for (const key of signalIdentityKeys(signal)) existingSignalsByKey.set(key, signal);
+  }
+  const seen = new Set(existingSignalsByKey.keys());
   const candidates = [];
   const duplicateInputs = new Set();
+  let metadataEnriched = 0;
   for (const item of items) {
     if (!item || typeof item !== "object") throw new Error("each item must be an object");
     const url = normalizeUrl(item.url);
@@ -1709,6 +1779,42 @@ function importBrowserCapture(state, sourceId, items, blockedItems = [], context
     const keys = signalIdentityKeys(candidate);
     const duplicateKey = keys.find((key) => seen.has(key) || duplicateInputs.has(key));
     if (duplicateKey) {
+      const existing = keys
+        .map((key) => existingSignalsByKey.get(key))
+        .find(Boolean);
+      if (existing) {
+        const description = String(item.contentText ?? item.description ?? "").trim();
+        const coverUrl = normalizeUrl(item.coverUrl) || "";
+        const mediaItems = Array.isArray(item.mediaItems) ? item.mediaItems : [];
+        let enriched = false;
+        if (!String(existing.title || "").trim() && String(item.title || "").trim()) {
+          existing.title = String(item.title).trim();
+          enriched = true;
+        }
+        if (!String(existing.contentText || "").trim() && description) {
+          existing.contentText = description;
+          enriched = true;
+        }
+        if (!String(existing.coverUrl || "").trim() && coverUrl) {
+          existing.coverUrl = coverUrl;
+          enriched = true;
+        }
+        if (!Array.isArray(existing.mediaItems) || existing.mediaItems.length === 0) {
+          if (mediaItems.length > 0) {
+            existing.mediaItems = mediaItems;
+            existing.imageDescriptions = mediaDescriptions(mediaItems, []);
+            enriched = true;
+          }
+        }
+        if (!String(existing.publishedAt || "").trim() && String(item.publishedAt || "").trim()) {
+          existing.publishedAt = item.publishedAt;
+          enriched = true;
+        }
+        if (enriched) {
+          existing.updatedAt = now();
+          metadataEnriched += 1;
+        }
+      }
       if (duplicateInputs.has(duplicateKey)) continue;
       for (const key of keys) duplicateInputs.add(key);
       continue;
@@ -1720,13 +1826,14 @@ function importBrowserCapture(state, sourceId, items, blockedItems = [], context
   const run = {
     id: id("run"),
     sourceId: source.id,
-    trigger: "browser-assisted",
+    trigger: String(options.trigger || "browser-assisted"),
     status: "running",
     startedAt: now(),
     finishedAt: "",
     found: items.length + blockedNotes.length,
     created: 0,
     duplicates: items.length - candidates.length,
+    metadataEnriched,
     loadedCount: items.length + blockedNotes.length,
     blockedNoteCount: blockedNotes.length,
     profileNoteCount: positiveCount(context.profileNoteCount),
@@ -1757,6 +1864,7 @@ function importBrowserCapture(state, sourceId, items, blockedItems = [], context
 
   for (const item of candidates) {
     const engagement = parseCount(item.engagement);
+    const mediaItems = Array.isArray(item.mediaItems) ? item.mediaItems : [];
     state.signals.unshift({
       id: id("signal"),
       sourceId: source.id,
@@ -1765,6 +1873,10 @@ function importBrowserCapture(state, sourceId, items, blockedItems = [], context
       author: source.account || source.name,
       url: item.url,
       title: String(item.title ?? "").trim(),
+      contentText: String(item.contentText ?? item.description ?? "").trim(),
+      coverUrl: normalizeUrl(item.coverUrl) || "",
+      mediaItems,
+      imageDescriptions: mediaDescriptions(mediaItems, []),
       publishedAt: item.publishedAt || "",
       capturedAt: now(),
       engagement,
@@ -1823,6 +1935,211 @@ function importBrowserCapture(state, sourceId, items, blockedItems = [], context
   refreshEngagementMetrics(state);
   finalizeCollectionRun(run);
   return run;
+}
+
+function accountWatchSourceContext(result = {}) {
+  return {
+    ...(result.context && typeof result.context === "object" ? result.context : {}),
+    checkedAt: result.checkedAt || now(),
+    effectiveUrl: result.effectiveUrl || "",
+    captureProvider: "playwright-public-profile",
+    sourceProfileUrl: result.source?.url || result.context?.sourceProfileUrl || ""
+  };
+}
+
+function accountWatchNextAction(run, accountWatch) {
+  if (run.created > 0) {
+    return `已导入 ${run.created} 条可打开笔记；其余 ${accountWatch.previewOnly ? "游客态预览" : "内容"}继续按主页快照监控`;
+  }
+  if (accountWatch.itemCount > 0) {
+    return `主页已刷新，可见 ${accountWatch.itemCount} 条；没有发现新的可导入笔记`;
+  }
+  return "主页已刷新，没有发现可读取笔记";
+}
+
+function persistAccountWatchSuccess(state, source, result, trigger, timestamp) {
+  const run = importBrowserCapture(
+    state,
+    source.id,
+    result.items || [],
+    result.blockedItems || [],
+    accountWatchSourceContext(result),
+    { trigger: "account-watch" }
+  );
+  run.status = run.created > 0 ? "ok" : "ok-no-new";
+  run.failureReason = "";
+  const accountWatch = accountWatchRuntimeForSource(state, source.id);
+  run.nextAction = accountWatchNextAction(run, accountWatch || {});
+
+  source.lastRunStatus = run.status;
+  source.lastRunAt = run.finishedAt || timestamp;
+  source.lastRunTrigger = trigger;
+  source.lastCollectionError = "";
+  source.failureCount = 0;
+  source.automationStatus = "scheduled";
+  if (trigger !== "manual") source.lastAutomaticRunAt = run.finishedAt || timestamp;
+  source.nextRunAt = nextAccountWatchRun(source, state.settings.collectionTime, new Date(run.finishedAt || timestamp));
+  return run;
+}
+
+function persistAccountWatchFailure(state, source, result, trigger, timestamp) {
+  const status = result.status === "failed" ? "failed" : "blocked";
+  const run = {
+    id: id("run"),
+    sourceId: source.id,
+    trigger: "account-watch",
+    status,
+    startedAt: result.startedAt || timestamp,
+    finishedAt: result.checkedAt || timestamp,
+    found: 0,
+    created: 0,
+    duplicates: 0,
+    failureReason: result.failureReason || "账号主页刷新失败",
+    nextAction: result.nextAction || "保留上一份有效快照，并等待下一次公开主页刷新",
+    challengeCode: result.challengeCode || "",
+    effectiveUrl: result.effectiveUrl || ""
+  };
+  finalizeCollectionRun(run);
+  state.collectionRuns.unshift(run);
+
+  source.lastRunStatus = status;
+  source.lastRunAt = run.finishedAt;
+  source.lastRunTrigger = trigger;
+  source.lastCollectionError = run.failureReason;
+  source.failureCount = Number(source.failureCount || 0) + 1;
+  source.automationStatus = status === "blocked" ? "manual-required" : "retrying";
+  if (trigger !== "manual") source.lastAutomaticRunAt = run.finishedAt;
+  source.nextRunAt = nextAccountWatchRun(source, state.settings.collectionTime, new Date(run.finishedAt));
+  return run;
+}
+
+let accountWatchRefreshBusy = false;
+
+async function refreshAccountWatchQueued(options = {}) {
+  const sourceId = String(options.sourceId || "").trim();
+  const trigger = String(options.trigger || "manual");
+  const force = options.force === true;
+  const manual = options.manual === true;
+
+  if (accountWatchRefreshBusy) {
+    if (manual) throw new Error("账号刷新正在进行，请等待当前批次完成");
+    return { ok: true, skipped: true, reason: "account watch refresh is already running" };
+  }
+
+  const snapshot = await readState();
+  if (!manual && !automationEnabled(snapshot)) {
+    return { ok: true, skipped: true, reason: "automation is disabled" };
+  }
+  const available = (snapshot.sources || []).filter(isAccountWatchSource);
+  const selected = available.filter((source) => (
+    sourceId ? source.id === sourceId : force || isAccountWatchDue(source)
+  ));
+  if (sourceId && selected.length === 0) throw new Error("小红书账号主页源不存在");
+
+  const runnable = selected.filter((source) => !runningSourceIds.has(source.id));
+  const skipped = selected.length - runnable.length;
+  if (runnable.length === 0) {
+    return {
+      ok: true,
+      skipped: true,
+      total: selected.length,
+      skippedCount: skipped,
+      reason: selected.length ? "selected account source is already running" : "no account refresh is due"
+    };
+  }
+
+  accountWatchRefreshBusy = true;
+  for (const source of runnable) runningSourceIds.add(source.id);
+  const startedAt = now();
+  let refreshResults = [];
+  try {
+    try {
+      refreshResults = await refreshXhsProfileSources(runnable);
+    } catch (error) {
+      refreshResults = runnable.map((source) => ({
+        ok: false,
+        status: "failed",
+        sourceId: source.id,
+        sourceName: source.name || source.account || source.id,
+        checkedAt: now(),
+        startedAt,
+        failureReason: String(error?.message || error || "浏览器启动失败"),
+        nextAction: "检查本机 Chrome 与网络后重试；上一份有效快照不会受影响"
+      }));
+    }
+  } finally {
+    for (const source of runnable) runningSourceIds.delete(source.id);
+    accountWatchRefreshBusy = false;
+  }
+
+  return enqueueStateMutation(async () => {
+    const state = await readState();
+    const persisted = [];
+    for (const result of refreshResults) {
+      const source = (state.sources || []).find((item) => item.id === result.sourceId);
+      if (!source || !isAccountWatchSource(source)) continue;
+      const checkedAt = result.checkedAt || now();
+      if (result.ok) {
+        const run = persistAccountWatchSuccess(
+          state,
+          source,
+          { ...result, startedAt },
+          trigger,
+          checkedAt
+        );
+        const accountWatch = accountWatchRuntimeForSource(state, source.id);
+        persisted.push({
+          ok: true,
+          status: run.status,
+          sourceId: source.id,
+          sourceName: source.name || source.account || source.id,
+          created: run.created,
+          itemCount: accountWatch?.itemCount || 0,
+          todayNewCount: accountWatch?.todayNewCount || 0,
+          previewOnly: accountWatch?.previewOnly === true,
+          run
+        });
+      } else {
+        const run = persistAccountWatchFailure(
+          state,
+          source,
+          { ...result, startedAt },
+          trigger,
+          checkedAt
+        );
+        persisted.push({
+          ok: false,
+          status: run.status,
+          sourceId: source.id,
+          sourceName: source.name || source.account || source.id,
+          created: 0,
+          itemCount: 0,
+          todayNewCount: 0,
+          failureReason: run.failureReason,
+          nextAction: run.nextAction,
+          challengeCode: run.challengeCode,
+          run
+        });
+      }
+    }
+    refreshEngagementMetrics(state);
+    await writeState(state);
+    const runs = persisted.map((item) => item.run);
+    return {
+      ok: true,
+      ranAt: now(),
+      trigger,
+      total: selected.length,
+      okCount: persisted.filter((item) => String(item.status).startsWith("ok")).length,
+      blocked: persisted.filter((item) => item.status === "blocked").length,
+      failed: persisted.filter((item) => item.status === "failed").length,
+      skipped: skipped,
+      created: persisted.reduce((total, item) => total + Number(item.created || 0), 0),
+      newPreviewCount: persisted.reduce((total, item) => total + Number(item.todayNewCount || 0), 0),
+      envelope: aggregateCollectionEnvelopes(runs),
+      results: persisted
+    };
+  });
 }
 
 function importBrowserDetailCapture(state, signalId, sourceId, capture) {
@@ -2123,6 +2440,7 @@ async function importSourceIntake(state, text, options = {}) {
       account: name,
       role: "benchmark",
       url,
+      accountWatch: platform === "xiaohongshu" || isBilibili,
       checkFrequency: platform === "xiaohongshu" || isBilibili ? "daily" : "weekly",
       collectionMethod: platform === "xiaohongshu"
         ? "browser-assisted"
@@ -3718,7 +4036,26 @@ async function runAutomationTickQueued(force, options = {}) {
   }
   automationTickBusy = true;
   try {
-    return await enqueueStateMutation(() => runAutomationTick(force));
+    const publicResult = await enqueueStateMutation(() => runAutomationTick(force));
+    const accountResult = await refreshAccountWatchQueued({
+      force,
+      trigger: "account-watch",
+      manual: false
+    });
+    if (accountResult?.skipped || accountResult?.ok === false) {
+      return publicResult;
+    }
+    const results = [...(publicResult.results || []), ...(accountResult.results || [])];
+    return {
+      ...publicResult,
+      total: Number(publicResult.total || 0) + Number(accountResult.total || 0),
+      okCount: Number(publicResult.okCount || 0) + Number(accountResult.okCount || 0),
+      blocked: Number(publicResult.blocked || 0) + Number(accountResult.blocked || 0),
+      failed: Number(publicResult.failed || 0) + Number(accountResult.failed || 0),
+      skipped: Number(publicResult.skipped || 0) + Number(accountResult.skipped || 0),
+      accountWatch: accountResult,
+      results
+    };
   } finally {
     automationTickBusy = false;
   }
@@ -4031,7 +4368,8 @@ async function updateMorningPipelineRecord(runId, mutate, { final = false } = {}
     record.status = aggregatePipelineStatus(record.operations);
     const pipeline = morningPipelineRuntime(state, {
       automationEnabled: automationEnabled(state),
-      lastRun: record
+      lastRun: record,
+      accountWatch: buildAccountWatchRuntime(state)
     });
     record.stages = pipeline.stages;
     record.nextActions = pipeline.nextActions;
@@ -4070,7 +4408,8 @@ async function runMorningPipelineQueued() {
       };
       const pipeline = morningPipelineRuntime(state, {
         automationEnabled: automationEnabled(state),
-        lastRun: record
+        lastRun: record,
+        accountWatch: buildAccountWatchRuntime(state)
       });
       record.stages = pipeline.stages;
       record.nextActions = pipeline.nextActions;
@@ -4468,6 +4807,16 @@ async function handleApi(request, response, pathname) {
       });
       if (run) return sendJson(response, 200, { ok: true, run }, request);
       return sendJson(response, 409, { ok: false, error: "source is already running" }, request);
+    }
+
+    if (pathname === "/api/accounts/refresh") {
+      const result = await refreshAccountWatchQueued({
+        sourceId: String(body.sourceId || "").trim(),
+        trigger: "account-watch",
+        force: true,
+        manual: true
+      });
+      return sendJson(response, 200, result, request);
     }
 
     if (pathname === "/api/automation/tick") {

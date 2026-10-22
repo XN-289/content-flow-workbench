@@ -1,3 +1,5 @@
+import { isAccountWatchSource } from "./account-watch.mjs";
+
 const activeTopicStages = new Set(["topic", "outline", "draft", "production", "review", "ready-to-publish"]);
 
 export const automaticCollectionMethods = new Set(["public-rss", "public-page", "bilibili-public"]);
@@ -105,7 +107,22 @@ export function morningPipelineRuntime(state = {}, options = {}) {
   const inboxMinute = minuteOfDay(state.settings?.inboxTime);
   const pendingSignals = (state.signals || []).filter((signal) => signal.disposition === "inbox");
   const dueSources = (state.sources || []).filter((source) => isAutomaticCollectionDue(source, timestamp.getTime()));
-  const manualSources = (state.sources || []).filter((source) => isManualCollectionCandidate(source));
+  const accountWatchBySource = options.accountWatch?.bySource || {};
+  const browserAccountSources = (state.sources || []).filter(isAccountWatchSource);
+  const dueAccountSources = browserAccountSources.filter((source) => {
+    const nextRunAt = Date.parse(String(accountWatchBySource[source.id]?.nextRunAt || source.nextRunAt || ""));
+    return Number.isFinite(nextRunAt) && nextRunAt <= timestamp.getTime();
+  });
+  const blockedAccountSources = browserAccountSources.filter((source) => (
+    ["refresh-blocked", "refresh-failed"].includes(accountWatchBySource[source.id]?.refreshStatus)
+  ));
+  const todayNewPreviewCount = browserAccountSources.reduce(
+    (total, source) => total + safeNumber(accountWatchBySource[source.id]?.todayNewCount),
+    0
+  );
+  const manualSources = (state.sources || [])
+    .filter((source) => !isAccountWatchSource(source))
+    .filter((source) => isManualCollectionCandidate(source));
   const retryingSources = (state.sources || []).filter((source) => (
     isAutomaticCollectionCandidate(source)
     && source.automationStatus === "retrying"
@@ -129,10 +146,16 @@ export function morningPipelineRuntime(state = {}, options = {}) {
     {
       id: "collection",
       label: "到期采集",
-      status: options.automationEnabled === false ? "blocked" : dueSources.length || retryingSources.length ? "attention" : "ok",
+      status: options.automationEnabled === false
+        ? "blocked"
+        : dueSources.length || dueAccountSources.length || blockedAccountSources.length || retryingSources.length
+          ? "attention"
+          : "ok",
       detail: options.automationEnabled === false
         ? "页面自动化或环境变量已关闭。"
-        : `${dueSources.length} 个到期，${manualSources.length} 个待人工，${retryingSources.length} 个重试中。`,
+        : `${dueSources.length} 个公开源到期，${dueAccountSources.length} 个账号待刷新；今日 ${todayNewPreviewCount} 条新预览${
+          blockedAccountSources.length ? `，${blockedAccountSources.length} 个账号刷新受阻` : ""
+        }${manualSources.length ? `，${manualSources.length} 个待人工` : ""}${retryingSources.length ? `，${retryingSources.length} 个重试中` : ""}。`,
       view: "flow",
       anchor: "flow-sources"
     },

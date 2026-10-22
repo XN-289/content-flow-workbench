@@ -774,7 +774,17 @@ async function main() {
   equal(blockedCommand.primaryAction, "capture", "blocked source command action");
   match(blockedCommand.nextAction, /缺少可打开 noteId.*App 分享/, "blocked source command next action");
   equal(blockedCommand.blockedPreviews.length, 12, "blocked source command preview count");
-  const allowedPreviewKeys = new Set(["title", "engagement", "publishedAt", "coverUrl", "reason"]);
+  const allowedPreviewKeys = new Set([
+    "title",
+    "description",
+    "engagement",
+    "publishedAt",
+    "coverUrl",
+    "reason",
+    "isNew",
+    "firstSeenAt",
+    "lastSeenAt"
+  ]);
   truthy(
     blockedCommand.blockedPreviews.every((preview) => (
       Object.keys(preview).every((key) => allowedPreviewKeys.has(key))

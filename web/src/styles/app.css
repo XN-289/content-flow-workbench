@@ -950,7 +950,7 @@
     flex: none;
   }
 
-  /* ---------- Guest-visible blocked previews ---------- */
+  /* ---------- Account watch previews ---------- */
   .blocked-preview-panel {
     display: flex;
     flex-direction: column;
@@ -1001,13 +1001,31 @@
     min-width: 0;
     min-height: 64px;
   }
-  .blocked-preview-copy strong {
+  .blocked-preview-copy strong,
+  .watch-item-title {
     display: -webkit-box;
+    max-width: 100%;
     overflow: hidden;
     color: var(--ink);
     font-size: 13px;
     font-weight: 500;
     line-height: 19px;
+    text-decoration: none;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .watch-item-title:hover {
+    text-decoration: underline;
+  }
+  .blocked-preview-description {
+    display: -webkit-box;
+    max-width: 100%;
+    margin: 0;
+    overflow: hidden;
+    color: var(--ink-muted);
+    font-size: 12px;
+    line-height: 18px;
     overflow-wrap: anywhere;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
@@ -1032,6 +1050,13 @@
   @media (max-width: 600px) {
     .blocked-preview-heading {
       gap: var(--space-2);
+    }
+    .blocked-preview-note {
+      font-size: 11px;
+      line-height: 17px;
+    }
+    .blocked-preview-item {
+      gap: 10px;
     }
     .blocked-preview-list {
       max-height: 420px;

@@ -42,6 +42,8 @@ export const api = {
   saveReview: (record: any, advanceToReviewed = false) =>
     post("/api/reviews/save", { record, advanceToReviewed }),
   collect: (sourceId: string) => post("/api/collect", { sourceId }),
+  refreshAccounts: (sourceId?: string) =>
+    post("/api/accounts/refresh", sourceId ? { sourceId } : {}),
   capture: (text: string, sourceId?: string) => post("/api/capture", { text, sourceId }),
   sourceIntake: (text: string) => post("/api/source-intake", { text }),
   sourceIntakeBatch: (text: string) =>

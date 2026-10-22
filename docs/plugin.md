@@ -101,7 +101,7 @@ const workbench = await connectContentFlowWorkbench({
 
 ```js
 await workbench.intakeSource(
-  "@纪同学叫思清 3.7万粉丝 https://www.xiaohongshu.com/user/profile/<id>"
+  "@示例博主 3.7万粉丝 https://www.xiaohongshu.com/user/profile/<id>"
 );
 ```
 
