@@ -3,10 +3,27 @@ import { api } from "./lib/api";
 import { StoreProvider, useStore } from "./state/store";
 import { Shell, Toasts, TopBar } from "./components/AppShell";
 import { Button, Field, Sheet } from "./components/primitives";
+import type { BatchIntakeResult } from "./lib/types";
 import { OverviewView } from "./features/overview";
 import { FlowView } from "./features/flow";
 import { WorkflowView } from "./features/workflow";
 import { SystemView } from "./features/system";
+
+function shouldRouteAsLinkBatch(text: string) {
+  if (!/https?:\/\//i.test(text)) return false;
+  return !/(?:^|\n)\s*(?:热评|评论|高赞评论)\s*[:：]|(?:^|\n)\s*@[^：:\n]{1,30}[：:]/m.test(text);
+}
+
+function intakeSummaryText(result: BatchIntakeResult) {
+  const summary = result.summary;
+  const parts = [`识别 ${summary.total} 条`];
+  if (summary.registered) parts.push(`账号 ${summary.registered}`);
+  if (summary.captured) parts.push(`笔记 ${summary.captured}`);
+  if (summary.duplicate) parts.push(`重复 ${summary.duplicate}`);
+  const pending = summary["needs-browser"] + summary.blocked + summary.failed;
+  if (pending) parts.push(`待处理 ${pending}`);
+  return parts.join("，");
+}
 
 function QuickCapture({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { mutate, setView, notify } = useStore();
@@ -19,12 +36,22 @@ function QuickCapture({ open, onClose }: { open: boolean; onClose: () => void })
       return;
     }
     try {
-      const result = await api.capture(text.trim());
+      const input = text.trim();
+      const linkBatch = shouldRouteAsLinkBatch(input);
+      const result = linkBatch
+        ? await api.sourceIntakeBatch(input)
+        : await api.capture(input);
       setError(null);
       setText("");
       onClose();
       await mutate("capture", () => Promise.resolve(), "已解析");
-      notify(`发现 ${result?.run?.found ?? 0} 条，新增 ${result?.run?.created ?? 0} 条，重复 ${result?.run?.duplicates ?? 0} 条`, "success");
+      if (linkBatch) {
+        const batchResult = result as BatchIntakeResult;
+        const pending = batchResult.summary["needs-browser"] + batchResult.summary.blocked + batchResult.summary.failed;
+        notify(intakeSummaryText(batchResult), pending ? "warning" : "success");
+      } else {
+        notify(`发现 ${result?.run?.found ?? 0} 条，新增 ${result?.run?.created ?? 0} 条，重复 ${result?.run?.duplicates ?? 0} 条`, "success");
+      }
       setView("flow");
     } catch (err: any) {
       setError(err.message || "解析失败");
@@ -45,12 +72,12 @@ function QuickCapture({ open, onClose }: { open: boolean; onClose: () => void })
         </>
       }
     >
-      <Field label="粘贴内容" hint="支持一行一条，解析后会进入 Inbox 待分诊" error={error || undefined}>
+      <Field label="粘贴内容" hint="主页或笔记链接会自动分流；含正文、热评时按内容解析" error={error || undefined}>
         <textarea
           className="textarea"
           value={text}
           onChange={(event) => setText(event.target.value)}
-          placeholder="把值得拆解的笔记正文或链接粘到这里"
+          placeholder="粘贴博主主页、笔记分享文案，或正文与热评"
         />
       </Field>
     </Sheet>

@@ -50,6 +50,7 @@ export const RUN_STATUS_LABEL: Record<string, string> = {
   success: "完成",
   ready: "就绪",
   done: "完成",
+  completed: "完成",
   pending: "待处理",
   attention: "待人工",
   blocked: "受阻",

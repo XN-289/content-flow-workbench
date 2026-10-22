@@ -21,6 +21,17 @@ export function TopBar({ onQuickCapture }: { onQuickCapture: () => void }) {
   const lastRun = state?.morningPipelineRuns?.[0];
   const stages = state?.runtime?.morningPipeline?.stages || [];
   const pipelineSummary = summarizePipelineStages(stages);
+  const pipelineNeedsAttention = Boolean(lastRun && (pipelineSummary.tone === "warning" || pipelineSummary.tone === "danger"));
+  const automationNeedsAttention = !automationKnown || !automationOn;
+  const attentionLabel = pipelineNeedsAttention
+    ? pipelineSummary.label
+    : automationNeedsAttention
+      ? envDisabled
+        ? "自动化已暂停"
+        : automationKnown
+          ? "自动化未开启"
+          : "自动化未配置"
+      : "";
 
   return (
     <header className="topbar">
@@ -48,35 +59,51 @@ export function TopBar({ onQuickCapture }: { onQuickCapture: () => void }) {
 
       <span className="spacer" />
 
-      {lastRun && (
-        <Chip tone={pipelineSummary.tone} dot>
-          {pipelineSummary.label}
-        </Chip>
-      )}
+      {pipelineNeedsAttention || automationNeedsAttention ? (
+        <span className="topbar-attention" title={attentionLabel} aria-label={attentionLabel}>
+          <Chip tone="warning" dot>
+            <span className="attention-label-full">{attentionLabel}</span>
+            <span className="attention-label-compact">
+              {pipelineNeedsAttention ? "流水线待处理" : envDisabled ? "自动化暂停" : "自动化未开启"}
+            </span>
+          </Chip>
+        </span>
+      ) : null}
 
-      <Chip tone={!automationKnown ? "neutral" : automationOn ? "success" : "warning"} dot>
-        {!automationKnown
-          ? "自动化状态未知"
-          : envDisabled
-            ? "自动化已暂停（环境变量）"
-            : automationOn
-              ? "自动化运行中"
-              : "自动化已暂停"}
-      </Chip>
+      <details className="topbar-settings">
+        <summary className="btn ghost small">外观</summary>
+        <div
+          className="topbar-settings-panel"
+          onClick={(event) => {
+            const details = event.currentTarget.closest("details");
+            if (details) details.open = false;
+          }}
+        >
+          <Segmented
+            ariaLabel="主题模式"
+            value={theme}
+            onChange={(next) => setTheme(next)}
+            options={[
+              { value: "auto", label: "自动" },
+              { value: "light", label: "浅色" },
+              { value: "dark", label: "深色" }
+            ]}
+          />
+          <span className="subtle">
+            {!automationKnown
+              ? "自动化状态未配置"
+              : envDisabled
+                ? "自动化已由环境变量暂停"
+                : automationOn
+                  ? "自动化运行中"
+                  : "自动化已暂停"}
+          </span>
+        </div>
+      </details>
 
-      <Segmented
-        ariaLabel="主题模式"
-        value={theme}
-        onChange={(next) => setTheme(next)}
-        options={[
-          { value: "auto", label: "自动" },
-          { value: "light", label: "浅色" },
-          { value: "dark", label: "深色" }
-        ]}
-      />
-
-      <Button onClick={onQuickCapture} disabled={busy === "capture"}>
-        快速粘贴信号
+      <Button className="quick-capture" variant="primary" onClick={onQuickCapture} disabled={busy === "capture"}>
+        <span className="quick-capture-full">快速粘贴信号</span>
+        <span className="quick-capture-compact">粘贴</span>
       </Button>
     </header>
   );
@@ -112,9 +139,10 @@ export function Shell({
   inspectorLabel?: string;
 }) {
   const [mobilePanel, setMobilePanel] = useState<"queue" | "inspector" | null>(null);
+  const shellClass = ["shell", queue ? "" : "no-queue", inspector ? "" : "no-inspector"].filter(Boolean).join(" ");
 
   return (
-    <div className={`shell${queue ? "" : " no-queue"}`}>
+    <div className={shellClass}>
       {queue ? <aside className="zone-queue" aria-label="队列">{queue}</aside> : null}
       <main className="zone-canvas">
         {queue || inspector ? (

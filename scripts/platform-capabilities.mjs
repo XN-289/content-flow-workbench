@@ -25,7 +25,7 @@ export const platformCapabilities = [
   {
     id: "xiaohongshu",
     label: "小红书",
-    loginBoundary: "只读取用户手动滚动后页面已加载状态；不自动滚动，不使用账号登录态。",
+    loginBoundary: "只读取游客可见状态；单次自然滚动触发首屏评论，不持续遍历，不使用账号登录态。",
     riskBoundary: "采集范围以人工可见范围为准，unknown 不伪装成 complete。",
     capabilities: {
       list: { status: "partial", method: "浏览器辅助采集书签" },
@@ -51,15 +51,29 @@ export const platformCapabilities = [
     }
   },
   {
+    id: "bilibili",
+    label: "B 站",
+    loginBoundary: "只读取公开视频、主页或合集元数据和公开字幕轨；不使用登录态。",
+    riskBoundary: "412 / 403、登录墙或风控一律记录 blocked；不伪造采集完成。",
+    capabilities: {
+      list: { status: "partial", method: "yt-dlp 读取公开主页/合集，单次限制条数" },
+      detail: { status: "partial", method: "yt-dlp 读取公开标题、简介、作者和封面" },
+      comments: { status: "unsupported", method: "人工复制" },
+      body: { status: "partial", method: "公开视频简介；简介不等于逐字稿" },
+      media: { status: "partial", method: "只记录封面和链接，不下载视频" },
+      transcript: { status: "partial", method: "公开字幕轨优先；无字幕明确 missing，不自动跑 ASR" }
+    }
+  },
+  {
     id: "wechat",
     label: "公众号",
     loginBoundary: "只访问公开文章页；不使用公众号后台或第三方登录态。",
     riskBoundary: "RSS / 公开页面失败时保留失败运行，不生成假信号。",
     capabilities: {
       list: { status: "partial", method: "公开页面 / RSS（可用时）" },
-      detail: { status: "complete", method: "公开文章页解析" },
+      detail: { status: "partial", method: "公开文章页解析；真实页面 fixture 待验证" },
       comments: { status: "unsupported", method: "人工复制" },
-      body: { status: "complete", method: "公开文章正文抽取" },
+      body: { status: "partial", method: "公开文章正文抽取；真实页面 fixture 待验证" },
       media: { status: "partial", method: "图片描述与链接清单" },
       transcript: { status: "unsupported", method: "文章正文不等于音频逐字稿" }
     }

@@ -1,29 +1,32 @@
 # Agent Bridge
 
-- 版本：v0.2
-- 日期：2026-10-19
-- 适用范围：本地单人工作台与 Grok、Muse、Codex、Claude、Cursor 的轻量任务包协作；不做通用聊天入口和 Agent 平台
+- 版本：v0.3
+- 日期：2026-10-22
+- 适用范围：本地单人工作台与 gkbot、Muse、Grok、Codex、Claude、Cursor 的任务包、逐字稿分析、知识导出和结果回流协作；不做通用聊天入口和 Agent 平台
 
 ## 1. 目标
 
 Agent Bridge 把一次研究、拆解、提纲、写稿或视觉设计任务打包成固定目录，让本地和云端 Agent 使用同一份上下文与输出协议。工作台负责组织上下文、分发任务、回收结果和保留人工关卡；Agent 只返回 Markdown 候选稿。
 
 ```text
-工作台选题 / 素材 / 热评 / 信号 / 稿件版本
-  → task.md + task.json
+工作台信号 / 全文逐字稿 / 时间轴 / 候选分析 / 选题 / 素材 / 热评 / 稿件版本
+  → task.md + task.json（绑定 signalId 时自动带入完整证据上下文）
   → 本地 bridge / Google Drive 桌面同步目录
-  → Grok / Muse / Codex / Claude / Cursor
+  → gkbot / Muse / Grok / Codex / Claude / Cursor
   → result.md
   → 自动扫描与人工导入
   → 素材库或生产稿版本
 ```
 
+工作台同时提供 Node ESM 本地插件 `plugin/content-flow-workbench/`。宿主 Agent 优先通过插件方法读取平台能力、登记信源、生成逐字稿 / 分析、创建任务和导出知识，不直接拼接服务端 URL。协议见 [docs/plugin.md](plugin.md)。
+
 ## 2. Agent 支持方式
 
 | Agent | 接入方式 | 工作台动作 |
 | --- | --- | --- |
+| gkbot | 本地插件或任务目录 | 通过 plugin client 读取状态和推进链路，或消费 `task.md` 后回写 `result.md` |
+| Muse | 本地插件或任务目录 | 通过 plugin client 获取全文上下文，或按任务包回写 `result.md` |
 | Grok | 云端 Agent | 复制 `task.md` 到 Grok，把结果保存为任务目录的 `result.md` |
-| Muse | 云端 Agent | 复制 `task.md` 到 Muse，把结果保存为 `result.md` |
 | Codex | 本机 CLI | 点击“本机运行”，生成 `run-codex.ps1` 并非交互执行 |
 | Claude | 本机 CLI | 点击“本机运行”，生成 `run-claude.ps1` 并非交互执行 |
 | Cursor | 本机编辑器 | 点击“复制目录”，在 Cursor 打开该任务目录，处理后写入 `result.md` |
@@ -95,7 +98,14 @@ bridge/outbox/<task-id>/
 - 关联信号与高潜力信号，最多 12 条。
 - 既有稿件版本，最多 3 个。
 
-未绑定选题时，任务仍可携带素材、热评、数据线索和高潜力信号，用于日常研究或拆解。
+直接绑定一条信号时，任务包会自动带上：
+
+- 标题、来源、作者、平台、发布时间、链接和互动基线。
+- 完整逐字稿全文、带起止时间的全部分段、字数、时长、ASR 模型、生成时间和来源。
+- 最新一版候选分析，包括钩子、结构、节奏、留存机制、情绪回报、作者基线、带时间戳引文和证据缺口。
+- `unverified` 边界、已知缺失层和必须回原文核对的字段。
+
+逐字稿不能被截成摘要交付给 Agent；只有用户边界不允许外发时才保留本地任务。未绑定信号或选题时，任务仍可携带素材、热评、数据线索和高潜力信号，用于日常研究或拆解。
 
 Prompt 固定要求 Agent：
 
@@ -124,9 +134,13 @@ Prompt 固定要求 Agent：
 ## 9. 验证
 
 ```powershell
-node --check scripts/server.mjs
-node --check app/app.js
+npm run build:ui
 npm run test:chain
+npm run test:plugin
+node scripts/backend-pipeline-regression.mjs
+node scripts/source-intake-regression.mjs
 ```
 
-功能冒烟建议用临时数据文件与临时 `BRIDGE_ROOT`，不要直接用真实主数据测试云端同步。
+插件回归会启动动态端口的临时服务，检查 locator、九个方法、路由白名单、loopback / 重定向拒绝、无 MP4 时的逐字稿失败边界、全文 Agent 任务、Drive 导出和晨间流水线。功能冒烟仍应使用临时 `DATA_FILE`、`BRIDGE_ROOT`、`EVIDENCE_DIR` 和 Drive mock，不要直接用真实主数据测试云端同步。
+
+真实 Google Drive 桌面同步目录和 gkbot / Muse 宿主接入尚未完成端到端人工验收。代码与隔离回归通过不等于外部宿主的真实适配已经验收。

@@ -1,4 +1,11 @@
-import type { WorkbenchState } from "./types";
+import type {
+  AgentTask,
+  AgentTaskCreatePayload,
+  BatchIntakeResult,
+  KnowledgeExportRecord,
+  TranscriptAnalysisRun,
+  WorkbenchState
+} from "./types";
 
 // 与 scripts/server.mjs 保持一致的端点；前端不自行重写服务端状态机。
 async function post<T = any>(path: string, body?: any): Promise<T> {
@@ -37,19 +44,30 @@ export const api = {
   collect: (sourceId: string) => post("/api/collect", { sourceId }),
   capture: (text: string, sourceId?: string) => post("/api/capture", { text, sourceId }),
   sourceIntake: (text: string) => post("/api/source-intake", { text }),
+  sourceIntakeBatch: (text: string) =>
+    post<BatchIntakeResult>("/api/source-intake/batch", { text }),
   transcript: (signalId: string, force = false, background = false) =>
     post("/api/signals/transcript", { signalId, force, background }),
+  analysis: (signalId: string, force = false) =>
+    post<{ ok: true; reused: boolean; analysis: TranscriptAnalysisRun }>("/api/signals/analysis", {
+      signalId,
+      force
+    }),
+  exportKnowledge: (driveRoot?: string) =>
+    post<{ ok: true; export: KnowledgeExportRecord }>("/api/knowledge/export", driveRoot ? { driveRoot } : {}),
   runMorningPipeline: () => post("/api/morning-pipeline/run"),
   automationTick: (force = false) => post("/api/automation/tick", { force }),
   automationSettings: (automationEnabled: boolean) => post("/api/automation/settings", { automationEnabled }),
   dropFolderScan: () => post("/api/drop-folder/scan"),
   evidenceCreate: (signalId: string) => post("/api/evidence-packages/create", { signalId }),
   evidenceVerify: (id: string, state: string, note = "") => post("/api/evidence-packages/verify", { id, state, note }),
-  agentCreate: (payload: any) => post("/api/agent-tasks/create", payload),
+  agentCreate: (payload: AgentTaskCreatePayload) =>
+    post<{ ok: true; task: AgentTask }>("/api/agent-tasks/create", payload),
   agentScan: () => post("/api/agent-tasks/scan"),
   agentRun: (id: string) => post("/api/agent-tasks/run", { id }),
   agentImport: (id: string) => post("/api/agent-tasks/import", { id }),
-  agentBridge: (driveRoot: string) => post("/api/agent-bridge/settings", { driveRoot }),
+  agentBridge: (driveRoot: string) =>
+    post<{ ok: true; settings: Record<string, any> }>("/api/agent-bridge/settings", { driveRoot }),
   backups: () => get<any>("/api/backups"),
   backupCreate: () => post("/api/backups/create"),
   backupRestore: (filename: string) => post("/api/backups/restore", { filename }),

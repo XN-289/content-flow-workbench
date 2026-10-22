@@ -84,9 +84,7 @@ git switch main
 git fetch origin --prune
 git merge --ff-only origin/main
 git merge --ff-only codex/<task-scope>
-npm run build:ui
-npm run test:chain
-node scripts/backend-pipeline-regression.mjs
+npm run verify:workbench
 git push origin main
 npm run verify:source
 ```
@@ -103,7 +101,7 @@ npm run verify:source
 - 所有 worktree HEAD、本地分支和远端分支必须已经包含在 `main`。
 - 本地 `main`、`origin/main` 和 GitHub 实时 `main` 必须是同一个 SHA。
 
-该脚本不能替代业务回归、TypeScript 检查、浏览器验收或安全边界检查。它们必须同时通过。
+该脚本不能替代 `npm run verify:workbench`、浏览器验收或安全边界检查。它们必须同时通过。
 
 ## 8. 最终交付信息
 
@@ -112,5 +110,5 @@ npm run verify:source
 1. 最终提交 SHA。
 2. 已合入的分支或 worktree 列表。
 3. `npm run verify:source` 结果。
-4. 构建、链路、后端流水线和浏览器验收结果。
+4. `npm run verify:workbench` 与浏览器验收结果。
 5. 未解决冲突、未合并分支和残余风险；没有就明确写“无”。

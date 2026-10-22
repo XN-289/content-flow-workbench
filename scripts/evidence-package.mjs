@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+export const evidencePackageSchemaVersion = 2;
+
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -65,6 +67,141 @@ function mediaItems(signal = {}) {
     }));
 }
 
+function publicPageUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (!["http:", "https:"].includes(url.protocol)) return "";
+    if (url.username || url.password) return "";
+    url.hash = "";
+    for (const key of [...url.searchParams.keys()]) {
+      if (/token|session|cookie|auth|signature|^xsec_/i.test(key)) url.searchParams.delete(key);
+    }
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function transcriptSourceType(source = "", model = "") {
+  const marker = `${source} ${model}`.toLowerCase();
+  if (marker.includes("platform-subtitle")) return "platform-subtitle";
+  if (marker.includes("local-asr")) return "local-asr";
+  if (/import|manual|human|pasted|visible-page/.test(marker)) return "imported";
+  return "unknown";
+}
+
+function transcriptReviewNote(sourceType) {
+  if (sourceType === "platform-subtitle") {
+    return "平台字幕轨也不等于已核验文本；错字、断句和覆盖范围仍需人工核对。";
+  }
+  if (sourceType === "local-asr") {
+    return "本地 ASR 可能有同音字、断句和术语错误，引用前必须人工核对。";
+  }
+  if (sourceType === "imported") {
+    return "导入或人工记录需核对原始来源、完整性与时间轴。";
+  }
+  return "逐字稿来源未明确标注，不能假定它来自 ASR 或平台字幕。";
+}
+
+function transcriptEvidence(signal = {}) {
+  const source = String(signal.transcriptSource || "");
+  const model = String(signal.transcriptModel || "");
+  const sourceType = transcriptSourceType(source, model);
+  return {
+    evidenceState: "unverified",
+    status: String(signal.transcriptStatus || "missing"),
+    source,
+    sourceType,
+    model,
+    capturedAt: String(signal.transcriptCapturedAt || ""),
+    durationSeconds: Number(signal.transcriptDurationSeconds || 0),
+    reviewRequired: true,
+    reviewNote: transcriptReviewNote(sourceType)
+  };
+}
+
+function timestampValue(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, value);
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const direct = Number(text);
+  if (Number.isFinite(direct)) return Math.max(0, direct);
+  const parts = text.split(":").map(Number);
+  if (parts.some((part) => !Number.isFinite(part))) return null;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return null;
+}
+
+function chapterEvidence(signal = {}) {
+  const chapters = Array.isArray(signal.chapters) ? signal.chapters : [];
+  return chapters
+    .map((chapter, index) => {
+      if (!chapter || typeof chapter !== "object") return null;
+      const milliseconds = Number(chapter.timeMilliseconds);
+      const startSeconds = timestampValue(
+        chapter.startSeconds
+        ?? chapter.start
+        ?? chapter.startTimestamp
+        ?? (Number.isFinite(milliseconds) ? milliseconds / 1000 : null)
+      );
+      return {
+        index,
+        title: String(chapter.title || "").trim(),
+        startSeconds,
+        startTimestamp: String(chapter.startTimestamp || "").trim()
+          || (startSeconds === null ? "" : formatTranscriptTimestamp(startSeconds))
+      };
+    })
+    .filter((chapter) => chapter && (chapter.title || chapter.startSeconds !== null))
+    .sort((left, right) => (left.startSeconds ?? 0) - (right.startSeconds ?? 0))
+    .map((chapter, index) => ({ ...chapter, index }));
+}
+
+function commentEvidence(signal = {}) {
+  const comments = Array.isArray(signal.comments) ? signal.comments : [];
+  const sourceScope = signal.commentScope && typeof signal.commentScope === "object"
+    ? signal.commentScope
+    : {};
+  const capturedCount = Number(sourceScope.capturedCount ?? comments.length);
+  const samples = comments
+    .filter((comment) => comment && typeof comment === "object" && String(comment.content || "").trim())
+    .slice(0, 20)
+    .map((comment, index) => ({
+      index,
+      id: String(comment.id || ""),
+      content: String(comment.content || "").trim().slice(0, 1000),
+      author: String(comment.author || "").trim(),
+      likes: Number(comment.likes || 0),
+      createdAt: String(comment.createdAt || ""),
+      ipLocation: String(comment.ipLocation || "").trim(),
+      isAuthor: comment.isAuthor === true,
+      subCommentCount: Number(comment.subCommentCount || 0)
+    }));
+  return {
+    evidenceState: "unverified",
+    scope: {
+      ...sourceScope,
+      capturedCount: Number.isFinite(capturedCount) ? Math.max(0, capturedCount) : comments.length,
+      hasMore: sourceScope.hasMore === true,
+      complete: sourceScope.complete === true,
+      note: String(sourceScope.note || "只记录页面可见或导入的评论，不代表全部评论。").trim()
+    },
+    samples,
+    samplesTruncated: comments.length > samples.length,
+    totalSamplesAvailable: comments.length
+  };
+}
+
+function safePageAccess(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return {
+    ...value,
+    ...(value.finalUrl ? { finalUrl: publicPageUrl(value.finalUrl) } : {}),
+    ...(value.effectiveUrl ? { effectiveUrl: publicPageUrl(value.effectiveUrl) } : {})
+  };
+}
+
 function formatTranscriptTimestamp(value) {
   if (typeof value === "string" && value.trim()) {
     return value;
@@ -112,6 +249,16 @@ export async function createSignalEvidencePackage({
 
   const source = (state.sources || []).find((item) => item.id === signal.sourceId) || null;
   const collectionRun = (state.collectionRuns || []).find((item) => item.id === signal.collectionRunId) || null;
+  const transcript = transcriptEvidence(signal);
+  const chapters = chapterEvidence(signal);
+  const comments = commentEvidence(signal);
+  const captureState = String(signal.captureState || "").trim();
+  const authorId = String(signal.authorId || "").trim();
+  const sourceProfileUrl = publicPageUrl(signal.sourceProfileUrl);
+  const pageAccess = safePageAccess(signal.pageAccess);
+  const extraction = signal.extraction && typeof signal.extraction === "object"
+    ? { ...signal.extraction }
+    : {};
   const rawSnapshots = (state.rawSnapshots || [])
     .filter((snapshot) => (
       (Boolean(snapshot.runId) && snapshot.runId === signal.collectionRunId)
@@ -138,7 +285,7 @@ export async function createSignalEvidencePackage({
 
   const hashes = new Map();
   const signalEvidence = {
-    schemaVersion: 1,
+    schemaVersion: evidencePackageSchemaVersion,
     layer: "raw-signal",
     capturedFrom: "workbench structured signal",
     signal
@@ -148,7 +295,7 @@ export async function createSignalEvidencePackage({
 
   if (rawSnapshot) {
     const snapshotFile = await writeJsonFile(path.join(packageDirectory, "raw", "snapshot.json"), {
-      schemaVersion: 1,
+      schemaVersion: evidencePackageSchemaVersion,
       layer: "raw-snapshot",
       snapshot: rawSnapshot
     });
@@ -161,14 +308,18 @@ export async function createSignalEvidencePackage({
     const transcriptLines = [
       "# Candidate Transcript",
       "",
-      "This file is a local ASR candidate and requires human review.",
+      "This transcript is candidate evidence and requires human review.",
       "",
       `- Signal ID: ${signal.id}`,
       `- Status: ${signal.transcriptStatus}`,
-      `- Source: ${signal.transcriptSource || "unknown"}`,
-      `- Model: ${signal.transcriptModel || "unknown"}`,
-      `- Duration seconds: ${signal.transcriptDurationSeconds ?? "unknown"}`,
+      `- Evidence state: ${transcript.evidenceState}`,
+      `- Source type: ${transcript.sourceType}`,
+      `- Source: ${transcript.source || "unknown"}`,
+      `- Model: ${transcript.model || "unknown"}`,
+      `- Captured at: ${transcript.capturedAt || "unknown"}`,
+      `- Duration seconds: ${transcript.durationSeconds || "unknown"}`,
       `- Segment count: ${transcriptSegments.length}`,
+      `- Review note: ${transcript.reviewNote}`,
       `- Artifact path: ${signal.transcriptArtifactPath || "missing"}`,
       "",
       "## Transcript",
@@ -180,6 +331,12 @@ export async function createSignalEvidencePackage({
     ];
     for (const segment of transcriptSegments) {
       transcriptLines.push(`${formatTranscriptTimestamp(segment.startTimestamp ?? segment.start)} - ${formatTranscriptTimestamp(segment.endTimestamp ?? segment.end)}: ${String(segment.text || "")}`);
+    }
+    if (chapters.length) {
+      transcriptLines.push("", "## Platform Chapters", "");
+      for (const chapter of chapters) {
+        transcriptLines.push(`- ${chapter.startTimestamp || "unknown"} ${chapter.title || "(untitled)"}`);
+      }
     }
     const transcriptContent = `${transcriptLines.join("\n")}\n`;
     await writeFileAtomic(path.join(packageDirectory, "candidate", "transcript.md"), transcriptContent);
@@ -195,9 +352,14 @@ export async function createSignalEvidencePackage({
     `- Signal ID: ${signal.id}`,
     `- Platform: ${signal.platform || "other"}`,
     `- Author: ${signal.author || "unknown"}`,
-    `- Source URL: ${signal.url || "missing"}`,
+    `- Author ID: ${authorId || "unknown"}`,
+    `- Source profile: ${sourceProfileUrl || "missing"}`,
+    `- Source URL: ${publicPageUrl(signal.url) || "missing"}`,
     `- Captured at: ${signal.capturedAt || "unknown"}`,
+    `- Capture state: ${captureState || "unknown"}`,
     `- Verification: ${verification.state}`,
+    `- Chapters: ${chapters.length}`,
+    `- Comments: ${comments.scope.capturedCount} captured, hasMore=${comments.scope.hasMore}`,
     "",
     "## Title",
     "",
@@ -220,9 +382,10 @@ export async function createSignalEvidencePackage({
 
   const media = mediaItems(signal);
   const mediaManifest = {
-    schemaVersion: 1,
+    schemaVersion: evidencePackageSchemaVersion,
     evidenceId,
     status: media.length ? "not-downloaded" : "empty",
+    urlPolicy: "URLs are retained only in this local evidence package for current capture/download; signed or expiring media URLs must not be copied into Drive knowledge exports.",
     items: media
   };
   const mediaFile = await writeJsonFile(path.join(packageDirectory, "media-manifest.json"), mediaManifest);
@@ -231,7 +394,7 @@ export async function createSignalEvidencePackage({
   const files = [...hashes.entries()].map(([relativePath, hash]) => ({ path: relativePath, sha256: hash }));
   const missingLayers = rawSnapshot ? [] : ["raw-snapshot"];
   const meta = {
-    schemaVersion: 1,
+    schemaVersion: evidencePackageSchemaVersion,
     evidence: {
       id: evidenceId,
       subjectType: "signal",
@@ -245,38 +408,54 @@ export async function createSignalEvidencePackage({
     provenance: {
       sourceId: signal.sourceId || "",
       sourceName: source?.name || source?.account || "",
-      sourceUrl: source?.url || signal.url || "",
+      sourceUrl: publicPageUrl(source?.url || signal.url || ""),
+      sourceProfileUrl,
+      authorId,
       platform: signal.platform || "other",
       collectionMethod: source?.collectionMethod || "manual",
       dataBoundary: source?.dataBoundary || "unknown",
+      captureState,
       collectionRunId: collectionRun?.id || signal.collectionRunId || "",
       collectionRunStatus: collectionRun?.status || "",
       rawSnapshotIds: rawSnapshots.map((snapshot) => snapshot.id)
     },
     candidate: {
       title: signal.title || "",
-      url: signal.url || "",
+      url: publicPageUrl(signal.url),
       author: signal.author || "",
+      authorId,
       publishedAt: signal.publishedAt || "",
       capturedAt: signal.capturedAt || "",
       engagement: signal.engagement ?? null,
       relativeMultiple: signal.relativeMultiple ?? null,
-      dataPointCandidates: Array.isArray(signal.dataPointCandidates) ? signal.dataPointCandidates : []
+      dataPointCandidates: Array.isArray(signal.dataPointCandidates) ? signal.dataPointCandidates : [],
+      commentScope: comments.scope
     },
     verification,
     coverage: sourceCoverage(source, rawSnapshot, collectionRun),
     transcript: {
-      status: signal.transcriptStatus || "missing",
-      source: signal.transcriptSource || "",
-      model: signal.transcriptModel || "",
-      durationSeconds: signal.transcriptDurationSeconds ?? null,
+      ...transcript,
       segmentCount: transcriptSegments.length,
-      reviewRequired: true
+      artifactPath: signal.transcriptArtifactPath || ""
+    },
+    chapters,
+    comments: {
+      evidenceState: comments.evidenceState,
+      scope: comments.scope,
+      samples: comments.samples,
+      samplesTruncated: comments.samplesTruncated,
+      totalSamplesAvailable: comments.totalSamplesAvailable
+    },
+    capture: {
+      state: captureState,
+      pageAccess,
+      extraction
     },
     media: {
       status: mediaManifest.status,
       count: media.length,
-      downloadPolicy: "manifest-only; download later with idempotent checksums"
+      downloadPolicy: "manifest-only; download later with idempotent checksums",
+      urlPolicy: mediaManifest.urlPolicy
     },
     files,
     missingLayers,
@@ -294,17 +473,31 @@ export async function createSignalEvidencePackage({
   await writeFileAtomic(path.join(packageDirectory, "checksums.sha256"), `${manifestLines.join("\n")}\n`);
 
   const record = {
+    schemaVersion: evidencePackageSchemaVersion,
     id: evidenceId,
     subjectType: "signal",
     signalId: signal.id,
     sourceId: signal.sourceId || "",
     collectionRunId: collectionRun?.id || signal.collectionRunId || "",
     rawSnapshotId: rawSnapshot?.id || "",
+    authorId,
+    sourceProfileUrl,
+    captureState,
     packageKey,
     packagePath: relativePackagePath,
     packageDirectory,
     status: "candidate",
     verification,
+    transcript: {
+      evidenceState: transcript.evidenceState,
+      source: transcript.source,
+      sourceType: transcript.sourceType,
+      model: transcript.model,
+      capturedAt: transcript.capturedAt,
+      reviewRequired: transcript.reviewRequired
+    },
+    chapterCount: chapters.length,
+    commentScope: comments.scope,
     layers: [
       "meta",
       "raw-signal",

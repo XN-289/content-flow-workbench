@@ -13,7 +13,7 @@ import { useStore } from "../state/store";
 import { Shell } from "../components/AppShell";
 import { Button, Card, CheckItem, Chip, EmptyState, Field, QueueRow, Sheet, StageTrack, TimelineItem } from "../components/primitives";
 
-type SheetMode = "script" | "publication" | "review" | "friction" | null;
+type SheetMode = "topic" | "script" | "publication" | "review" | "friction" | null;
 
 export function WorkflowView() {
   const { state, activeTopicId, setActiveTopic, mutate, busy, refresh, setView } = useStore();
@@ -47,6 +47,14 @@ export function WorkflowView() {
 
   const openSheet = (mode: SheetMode) => {
     setError(null);
+    if (mode === "topic") {
+      setDraft({
+        title: activeTopic?.title || "",
+        coreIdea: activeTopic?.coreIdea || "",
+        targetReader: activeTopic?.targetReader || "",
+        minimalPublishableVersion: activeTopic?.minimalPublishableVersion || ""
+      });
+    }
     if (mode === "script") {
       const latest = related.scripts[related.scripts.length - 1];
       setDraft(
@@ -64,6 +72,17 @@ export function WorkflowView() {
   const save = async () => {
     setError(null);
     try {
+      if (!activeTopic) throw new Error("请先选择一个选题");
+      if (sheet === "topic") {
+        const title = String(draft.title || "").trim();
+        if (!title) throw new Error("选题标题不能为空");
+        await api.update("topics", activeTopic.id, {
+          title,
+          coreIdea: String(draft.coreIdea || "").trim(),
+          targetReader: String(draft.targetReader || "").trim(),
+          minimalPublishableVersion: String(draft.minimalPublishableVersion || "").trim()
+        });
+      }
       if (sheet === "script") {
         if (!draft.text?.trim()) throw new Error("正文不能为空");
         await api.record("scripts", { ...draft, topicId: activeTopic?.id });
@@ -146,6 +165,9 @@ export function WorkflowView() {
               hint={`${activeTopic.targetReader || "未设定目标读者"} · 更新于 ${fmtDateTime(activeTopic.updatedAt)}`}
               actions={
                 <>
+                  <Button small onClick={() => openSheet("topic")}>
+                    编辑信息
+                  </Button>
                   <Button small onClick={() => openSheet("script")}>
                     {related.scripts.length ? "编辑口播稿" : "新建口播稿"}
                   </Button>
@@ -179,37 +201,79 @@ export function WorkflowView() {
                     </div>
                   ) : null}
                 <StageTrack current={activeTopic.stage} />
-                <p className="muted" style={{ fontSize: 13, lineHeight: "22px" }}>{activeTopic.coreIdea}</p>
+                <div className="canvas-columns">
+                  <div className="stack" style={{ gap: 4 }}>
+                    <span className="section-label">核心观点</span>
+                    <p className="muted" style={{ fontSize: 13, lineHeight: "22px" }}>
+                      {activeTopic.coreIdea || "未填写核心观点"}
+                    </p>
+                  </div>
+                  <div className="stack" style={{ gap: 4 }}>
+                    <span className="section-label">目标读者</span>
+                    <p className="muted" style={{ fontSize: 13, lineHeight: "22px" }}>
+                      {activeTopic.targetReader || "未定义目标读者"}
+                    </p>
+                  </div>
+                  <div className="stack" style={{ gap: 4, gridColumn: "1 / -1" }}>
+                    <span className="section-label">最小可发布版本</span>
+                    <p className="muted" style={{ fontSize: 13, lineHeight: "22px" }}>
+                      {activeTopic.minimalPublishableVersion || "未定义最小可发布版本"}
+                    </p>
+                  </div>
+                </div>
               </div>
             </Card>
 
-            <div className="canvas-columns">
-              <Card title="人工关卡" hint="未确认时不能推进阶段">
-                <div className="stack" style={{ gap: 6 }}>
+            <details className="card workflow-checks">
+              <summary>
+                <span>推进检查</span>
+                {pendingGates.length ? (
+                  <Chip tone="warning">{pendingGates.length} 项人工关卡待确认</Chip>
+                ) : (
+                  <Chip tone="success">人工关卡已通过</Chip>
+                )}
+                {pendingChecks.length ? (
+                  <Chip tone="warning">{pendingChecks.length} 项制作检查未完成</Chip>
+                ) : (
+                  <Chip tone="success">制作检查完成</Chip>
+                )}
+              </summary>
+              <div className="canvas-columns workflow-check-columns">
+                <div className="stack">
+                  <div className="stack" style={{ gap: 2 }}>
+                    <strong>人工关卡</strong>
+                    <span className="subtle">未确认时不能推进阶段</span>
+                  </div>
+                  <div className="stack" style={{ gap: 6 }}>
                     {MANUAL_GATE_KEYS.map((key) => (
-                    <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                         <CheckItem done={Boolean(activeTopic.gates?.[key])}>{MANUAL_GATE_LABELS[key]}</CheckItem>
-                      <Button small onClick={() => toggleGate(key)} disabled={busy === "gates"}>
-                        {activeTopic.gates?.[key] ? "撤销" : "确认"}
-                      </Button>
-                    </div>
-                  ))}
+                        <Button small onClick={() => toggleGate(key)} disabled={busy === "gates"}>
+                          {activeTopic.gates?.[key] ? "撤销" : "确认"}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </Card>
 
-              <Card title="制作检查" hint="服务端在阶段推进时校验">
-                <div className="stack" style={{ gap: 6 }}>
+                <div className="stack">
+                  <div className="stack" style={{ gap: 2 }}>
+                    <strong>制作检查</strong>
+                    <span className="subtle">服务端在阶段推进时校验</span>
+                  </div>
+                  <div className="stack" style={{ gap: 6 }}>
                     {PRODUCTION_CHECK_KEYS.map((key) => (
-                    <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                         <CheckItem done={Boolean(activeTopic.productionChecks?.[key])}>{PRODUCTION_CHECK_LABELS[key]}</CheckItem>
-                      <Button small onClick={() => toggleCheck(key)} disabled={busy === "checks"}>
-                        {activeTopic.productionChecks?.[key] ? "撤销" : "完成"}
-                      </Button>
-                    </div>
-                  ))}
+                        <Button small onClick={() => toggleCheck(key)} disabled={busy === "checks"}>
+                          {activeTopic.productionChecks?.[key] ? "撤销" : "完成"}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </Card>
-            </div>
+              </div>
+            </details>
 
             <Card
               title={latestScript ? `口播稿 · 第 ${related.scripts.length} 版` : "口播稿"}
@@ -385,17 +449,20 @@ export function WorkflowView() {
           </>
         ) : null
       }
-      mobileAction={
-          <Button onClick={() => openSheet("script")}>
-          {latestScript ? "编辑口播稿" : "写第一版稿"}
-        </Button>
-      }
       />
 
       <Sheet
         open={sheet !== null}
         title={
-          sheet === "script" ? "口播稿" : sheet === "publication" ? "新增发布记录" : sheet === "review" ? "新增复盘" : "记录摩擦"
+          sheet === "topic"
+            ? "编辑选题信息"
+            : sheet === "script"
+              ? "口播稿"
+              : sheet === "publication"
+                ? "新增发布记录"
+                : sheet === "review"
+                  ? "新增复盘"
+                  : "记录摩擦"
         }
         onClose={() => setSheet(null)}
         footer={
@@ -407,6 +474,42 @@ export function WorkflowView() {
           </>
         }
       >
+        {sheet === "topic" ? (
+          <>
+            <Field label="选题标题" error={error || undefined}>
+              <input
+                className="input"
+                value={draft.title || ""}
+                onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+              />
+            </Field>
+            <Field label="核心观点" hint="这条内容最想让读者记住的一句话">
+              <textarea
+                className="textarea"
+                style={{ minHeight: 120 }}
+                value={draft.coreIdea || ""}
+                onChange={(e) => setDraft({ ...draft, coreIdea: e.target.value })}
+              />
+            </Field>
+            <Field label="目标读者" hint="写给谁看，以及他们正处在什么场景里">
+              <textarea
+                className="textarea"
+                style={{ minHeight: 100 }}
+                value={draft.targetReader || ""}
+                onChange={(e) => setDraft({ ...draft, targetReader: e.target.value })}
+              />
+            </Field>
+            <Field label="最小可发布版本" hint="先做到什么程度就可以发布并开始验证">
+              <textarea
+                className="textarea"
+                style={{ minHeight: 100 }}
+                value={draft.minimalPublishableVersion || ""}
+                onChange={(e) => setDraft({ ...draft, minimalPublishableVersion: e.target.value })}
+              />
+            </Field>
+          </>
+        ) : null}
+
         {sheet === "script" ? (
           <>
             <Field label="版本说明" hint="例如：第 2 版，压缩开头">

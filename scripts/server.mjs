@@ -5,10 +5,19 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { createBackupStore } from "./backup-store.mjs";
+import { analysisRuntime, createTranscriptAnalysis, latestAnalysisForSignal } from "./analysis-workflow.mjs";
+import { agentPluginManifest } from "./agent-plugin-contract.mjs";
+import { collectBilibiliPublic } from "./bilibili-public.mjs";
+import {
+  batchIntakeNextAction,
+  intakeStatusFromClassification,
+  parseBatchIntakeText
+} from "./batch-intake.mjs";
 import { aggregateCollectionEnvelopes, collectionEnvelopeFromRun, finalizeCollectionRun } from "./collection-envelope.mjs";
 import { createEvidenceRuntime, createSignalEvidencePackage, verifyEvidencePackage } from "./evidence-package.mjs";
 import { mediaDescriptions, normalizeDetailCapture } from "./detail-evidence.mjs";
 import { inboxFunnelRuntime } from "./inbox-funnel.mjs";
+import { exportKnowledgeToDrive, knowledgeExportRuntime } from "./knowledge-export.mjs";
 import {
   aggregatePipelineStatus,
   isAutomaticCollectionCandidate,
@@ -19,13 +28,15 @@ import {
   operationStatusFromResult
 } from "./morning-pipeline.mjs";
 import { platformCapabilityRuntime } from "./platform-capabilities.mjs";
-import { resolveSourceIntakeUrl } from "./source-intake.mjs";
+import { clearRuntimeLocator, publishRuntimeLocator } from "./runtime-locator.mjs";
+import { classifySourceIntakeUrl, resolveSourceIntakeUrl } from "./source-intake.mjs";
 import {
   applyTranscriptResult,
   createTranscriptRunId,
   resolveAsrRuntime,
   transcribeSignal
 } from "./transcribe-signal.mjs";
+import { captureXhsGuestNote } from "./xhs-guest-detail.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appDir = path.join(root, "app");
@@ -39,11 +50,13 @@ const backupRetentionLimit = Math.max(10, Number(process.env.BACKUP_RETENTION ||
 const dropDir = process.env.DROP_DIR ? path.resolve(process.env.DROP_DIR) : path.join(root, "drops");
 const dropProcessedDir = path.join(dropDir, "processed");
 const dropFailedDir = path.join(dropDir, "failed");
+const cloudInboxRelativeDir = path.join("ContentFlowWorkbench", "Inbox");
 const bridgeRoot = process.env.BRIDGE_ROOT ? path.resolve(process.env.BRIDGE_ROOT) : path.join(root, "bridge");
 const evidenceRoot = process.env.EVIDENCE_DIR ? path.resolve(process.env.EVIDENCE_DIR) : path.join(root, "evidence");
 const transcriptRoot = process.env.TRANSCRIPT_DIR ? path.resolve(process.env.TRANSCRIPT_DIR) : path.join(root, "data", "transcripts");
 const agentBridgeOutboxDir = path.join(bridgeRoot, "outbox");
 const port = Number(process.env.PORT || 5177);
+let activePort = port;
 const automationTickMs = Math.max(1000, Number(process.env.AUTOMATION_TICK_MS || 60000));
 const dropScanMs = Math.max(1000, Number(process.env.DROP_SCAN_MS || 30000));
 const browserCapturePaths = new Set(["/api/browser-capture", "/api/browser-detail-capture"]);
@@ -51,6 +64,7 @@ const dropExtensions = new Set([".json", ".md", ".txt"]);
 const runningSourceIds = new Set();
 const runningAgentTaskIds = new Set();
 const runningTranscriptSignalIds = new Set();
+const runningXhsCaptureIds = new Set();
 let stateMutationQueue = Promise.resolve();
 const browserCaptureTokens = new Map();
 const dropFileStability = new Map();
@@ -85,7 +99,13 @@ const emptyState = () => ({
   frictionLog: [],
   agentTasks: [],
   evidencePackages: [],
-  transcriptRuns: []
+  transcriptRuns: [],
+  analysisRuns: [],
+  knowledgeExports: [],
+  cloudInboxLedger: [],
+  intakeBatches: [],
+  intakeQueue: [],
+  captureRuns: []
 });
 
 const { stableJsonValue, readBackupFile, listBackups, createBackup } = createBackupStore({
@@ -121,7 +141,13 @@ async function readState() {
       agentTasks: Array.isArray(parsed.agentTasks) ? parsed.agentTasks : [],
       morningPipelineRuns: Array.isArray(parsed.morningPipelineRuns) ? parsed.morningPipelineRuns : [],
       evidencePackages: Array.isArray(parsed.evidencePackages) ? parsed.evidencePackages : [],
-      transcriptRuns: Array.isArray(parsed.transcriptRuns) ? parsed.transcriptRuns : []
+      transcriptRuns: Array.isArray(parsed.transcriptRuns) ? parsed.transcriptRuns : [],
+      analysisRuns: Array.isArray(parsed.analysisRuns) ? parsed.analysisRuns : [],
+      knowledgeExports: Array.isArray(parsed.knowledgeExports) ? parsed.knowledgeExports : [],
+      cloudInboxLedger: Array.isArray(parsed.cloudInboxLedger) ? parsed.cloudInboxLedger : [],
+      intakeBatches: Array.isArray(parsed.intakeBatches) ? parsed.intakeBatches : [],
+      intakeQueue: Array.isArray(parsed.intakeQueue) ? parsed.intakeQueue : [],
+      captureRuns: Array.isArray(parsed.captureRuns) ? parsed.captureRuns : []
     };
     state.settings.driveRoot = String(state.settings.driveRoot || "").trim();
     refreshEngagementMetrics(state);
@@ -153,7 +179,20 @@ async function writeState(state, options = {}) {
   }
   const temp = `${dataFile}.${crypto.randomUUID()}.tmp`;
   await fs.writeFile(temp, JSON.stringify(state, null, 2), "utf8");
-  await fs.rename(temp, dataFile);
+  const retryableCodes = new Set(["EPERM", "EACCES", "EBUSY"]);
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      await fs.rename(temp, dataFile);
+      return;
+    } catch (error) {
+      if (!retryableCodes.has(error?.code)) throw error;
+      if (attempt === 5) {
+        await fs.rm(temp, { force: true }).catch(() => {});
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20 * 2 ** attempt));
+    }
+  }
 }
 
 async function restoreBackup(filename) {
@@ -382,7 +421,7 @@ function requestOrigin(request) {
 }
 
 function isLocalOrigin(origin) {
-  return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+  return origin === `http://127.0.0.1:${activePort}` || origin === `http://localhost:${activePort}`;
 }
 
 function apiOriginAllowed(request, pathname) {
@@ -423,6 +462,46 @@ function latestRunForSource(state, sourceId) {
   return (state.collectionRuns || [])
     .filter((run) => run.sourceId === sourceId)
     .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")))[0] || null;
+}
+
+function normalizeBlockedPreview(item) {
+  if (!item || typeof item !== "object") return null;
+  const title = String(item.title ?? "").trim();
+  const coverUrl = String(item.coverUrl ?? "").trim();
+  if (!title && !coverUrl) return null;
+  const publishedAt = typeof item.publishedAt === "number"
+    ? item.publishedAt
+    : String(item.publishedAt ?? "").trim();
+  return {
+    title,
+    engagement: String(item.engagement ?? item.likedCount ?? "").trim(),
+    publishedAt,
+    coverUrl,
+    reason: String(item.reason || "note-id-unavailable")
+  };
+}
+
+function latestBlockedPreviewsForSource(state, sourceId) {
+  const snapshots = (state.rawSnapshots || [])
+    .filter((snapshot) => (
+      snapshot.sourceId === sourceId
+      && snapshot.format === "browser-assisted"
+    ))
+    .sort((left, right) => String(right.capturedAt || "").localeCompare(String(left.capturedAt || "")));
+
+  for (const snapshot of snapshots) {
+    try {
+      const content = JSON.parse(snapshot.content || "{}");
+      if (!Array.isArray(content.blockedItems) || content.blockedItems.length === 0) continue;
+      return content.blockedItems
+        .map(normalizeBlockedPreview)
+        .filter(Boolean)
+        .slice(0, 50);
+    } catch {
+      // Ignore malformed historical snapshots and keep looking for a readable one.
+    }
+  }
+  return [];
 }
 
 function sourceControlRecord(state, source, timestamp = Date.now()) {
@@ -504,6 +583,7 @@ function sourceControlRecord(state, source, timestamp = Date.now()) {
     nextRunAt: source.nextRunAt || "",
     failureCount: Number(source.failureCount || 0),
     error: source.lastCollectionError || latestRun?.failureReason || "",
+    blockedPreviews: latestBlockedPreviewsForSource(state, source.id),
     lastRun: latestRun ? {
       id: latestRun.id,
       status: latestRun.status,
@@ -566,6 +646,8 @@ function runtimeState(state) {
     commandCenter: commandCenterRuntime(state),
     inbox: inboxFunnelRuntime(state),
     evidencePackages: createEvidenceRuntime(state),
+    analysis: analysisRuntime(state),
+    knowledgeExport: knowledgeExportRuntime(state),
     morningPipeline: morningPipelineRuntime(state, {
       automationEnabled: automationEnabled(state),
       lastRun: state.morningPipelineRuns?.[0]
@@ -771,6 +853,7 @@ function platformContentId(platform = "", value = "") {
     xiaohongshu: /\/(?:explore|discovery\/item)\/([A-Za-z0-9_-]+)|\/user\/profile\/[A-Za-z0-9_-]+\/([A-Za-z0-9_-]+)/,
     x: /\/status(?:es)?\/(\d+)/,
     douyin: /\/video\/(\d+)/,
+    bilibili: /\/video\/(BV[A-Za-z0-9]+)|(?:^|\/)av(\d+)/i,
     wechat: /\/s\/([A-Za-z0-9_-]+)/
   };
   const pattern = patterns[platform];
@@ -781,7 +864,7 @@ function platformContentId(platform = "", value = "") {
 
 function signalIdentityKeys(record = {}) {
   const url = canonicalSignalUrl(record.url);
-  const platform = String(record.platform || "").trim().toLowerCase() || "other";
+  const platform = String(record.platform || platformFromUrl(url || record.url)).trim().toLowerCase() || "other";
   const contentId = platformContentId(platform, url || record.url || "");
   const title = normalizedTitle(record.title);
   const author = normalizedTitle(record.author);
@@ -1347,6 +1430,112 @@ async function runCollection(state, sourceId, trigger = "manual") {
       }
       run.status = run.created > 0 ? "ok" : "ok-no-new";
       run.nextAction = run.created > 0 ? "到 Inbox 分流" : "页面无新增信号，原始快照已保留";
+    } else if (source.collectionMethod === "bilibili-public") {
+      const collected = await collectBilibiliPublic(source.url);
+      run.found = collected.items.length;
+      run.duplicates = 0;
+      run.adapter = {
+        id: "bilibili-public",
+        executableAvailable: collected.executableAvailable === true,
+        subtitleCount: collected.subtitleCount || 0
+      };
+      state.rawSnapshots.unshift({
+        id: id("snapshot"),
+        runId: run.id,
+        sourceId: source.id,
+        url: source.url,
+        capturedAt: now(),
+        format: "bilibili-public-metadata",
+        context: {
+          status: collected.status,
+          itemCount: collected.items.length,
+          subtitleCount: collected.subtitleCount || 0,
+          mediaDownloaded: false,
+          credentialsIncluded: false
+        },
+        content: JSON.stringify(collected.items, null, 2).slice(0, 500000)
+      });
+
+      if (collected.status === "blocked") {
+        run.status = "blocked";
+        run.failureReason = collected.reason;
+        run.humanAction = collected.humanAction;
+        run.nextAction = collected.nextAction;
+      } else if (collected.status === "failed") {
+        run.status = "failed";
+        run.failureReason = collected.reason;
+        run.humanAction = collected.humanAction;
+        run.nextAction = collected.nextAction;
+      } else {
+        for (const item of collected.items) {
+          const candidate = {
+            platform: "bilibili",
+            author: item.author || source.account || source.name,
+            title: item.title,
+            url: item.url,
+            publishedAt: item.publishedAt,
+            contentText: item.description || ""
+          };
+          if (hasSignal(state, candidate)) {
+            run.duplicates += 1;
+            continue;
+          }
+          const transcript = item.transcriptStatus === "captured" && item.transcriptText
+            ? {
+                transcriptText: item.transcriptText,
+                transcriptStatus: "captured",
+                transcriptSource: item.transcriptSource,
+                transcriptModel: item.transcriptModel,
+                transcriptSegments: item.transcriptSegments,
+                transcriptDurationSeconds: item.transcriptDurationSeconds,
+                transcriptCapturedAt: item.transcriptCapturedAt,
+                transcriptNote: item.transcriptNote,
+                evidenceState: "unverified"
+              }
+            : {
+                transcriptText: "",
+                transcriptStatus: "missing",
+                transcriptSource: "",
+                transcriptNote: "B 站公开字幕轨不可用；未把简介冒充逐字稿。"
+              };
+          state.signals.unshift({
+            id: id("signal"),
+            sourceId: source.id,
+            collectionRunId: run.id,
+            platform: "bilibili",
+            author: item.author || source.account || source.name,
+            authorId: item.authorId || "",
+            sourceProfileUrl: item.sourceProfileUrl || "",
+            url: item.url,
+            title: item.title,
+            publishedAt: item.publishedAt,
+            capturedAt: now(),
+            engagement: null,
+            authorMedianEngagement: source.authorMedianEngagement ?? null,
+            relativeMultiple: null,
+            automationTier: "needs-review",
+            seen: false,
+            disposition: "inbox",
+            note: "B 站公开元数据；字幕和简介均不自动视为已验证",
+            contentText: item.description || "",
+            coverUrl: item.coverUrl || "",
+            mediaItems: item.mediaItems || [],
+            imageDescriptions: mediaDescriptions(item.mediaItems || [], []),
+            dataPointCandidates: extractDataPointCandidates([item.description || ""]),
+            ...transcript,
+            extraction: {
+              adapter: "bilibili-public",
+              mediaDownloaded: false,
+              credentialsIncluded: false
+            },
+            createdAt: now(),
+            updatedAt: now()
+          });
+          run.created += 1;
+        }
+        run.status = run.created > 0 ? "ok" : "ok-no-new";
+        run.nextAction = run.created > 0 ? "到 Inbox 分流" : "公开页面无新增内容";
+      }
     } else {
       run.status = "blocked";
       run.failureReason = `${source.collectionMethod} 需要人工动作或专用 adapter`;
@@ -1474,14 +1663,9 @@ function importBrowserCapture(state, sourceId, items, blockedItems = [], context
 
   const blockedNotes = blockedItems.map((item) => {
     if (!item || typeof item !== "object") throw new Error("each blocked item must be an object");
-    const title = String(item.title ?? "").trim();
-    if (!title && !item.coverUrl) throw new Error("each blocked item needs a title or cover URL");
-    return {
-      ...item,
-      title,
-      noteId: String(item.noteId ?? "").trim(),
-      reason: item.reason || "note-id-unavailable"
-    };
+    const preview = normalizeBlockedPreview(item);
+    if (!preview) throw new Error("each blocked item needs a title or cover URL");
+    return preview;
   });
 
   const seen = new Set((state.signals || []).flatMap((signal) => signalIdentityKeys(signal)));
@@ -1686,6 +1870,183 @@ function importBrowserDetailCapture(state, signalId, sourceId, capture) {
   };
 }
 
+function publicCaptureRun(run = {}) {
+  return {
+    id: run.id,
+    status: run.status,
+    trigger: run.trigger,
+    startedAt: run.startedAt,
+    updatedAt: run.updatedAt,
+    finishedAt: run.finishedAt,
+    noteId: run.noteId,
+    captureUrl: run.captureUrl,
+    captureState: run.captureState,
+    reason: run.reason,
+    humanAction: run.humanAction,
+    signalId: run.signalId,
+    created: run.created,
+    transcriptStatus: run.transcriptStatus,
+    mediaCount: run.mediaCount,
+    warnings: run.warnings
+  };
+}
+
+function xhsCaptureProgressPatch(payload = {}) {
+  return {
+    status: String(payload.status || "running"),
+    captureState: String(payload.captureState || ""),
+    noteId: String(payload.noteId || ""),
+    captureUrl: normalizeUrl(payload.finalUrl || payload.captureUrl || ""),
+    reason: String(payload.reason || "").slice(0, 2000),
+    humanAction: String(payload.humanAction || "").slice(0, 2000),
+    checkedAt: String(payload.checkedAt || now())
+  };
+}
+
+async function persistXhsCaptureProgress(runId, payload) {
+  await enqueueStateMutation(async () => {
+    const state = await readState();
+    const run = (state.captureRuns || []).find((item) => item.id === runId);
+    if (!run) return;
+    const patch = xhsCaptureProgressPatch(payload);
+    const changed = ["status", "captureState", "noteId", "captureUrl", "reason", "humanAction"]
+      .some((key) => run[key] !== patch[key]);
+    if (!changed) return;
+    Object.assign(run, patch, {
+      updatedAt: now(),
+      ...(["captured", "blocked", "failed"].includes(patch.status) ? { finishedAt: now() } : {})
+    });
+    await writeState(state, { backup: false });
+  });
+}
+
+function xhsCaptureSignal(state, capture = {}) {
+  const noteId = String(capture.noteId || platformContentId("xiaohongshu", capture.captureUrl || ""));
+  const canonicalCaptureUrl = canonicalSignalUrl(capture.captureUrl || "");
+  return (state.signals || []).find((signal) => {
+    if (signal.platform !== "xiaohongshu") return false;
+    if (noteId && (signal.noteId === noteId || platformContentId("xiaohongshu", signal.url || "") === noteId)) {
+      return true;
+    }
+    return Boolean(canonicalCaptureUrl && canonicalSignalUrl(signal.url || "") === canonicalCaptureUrl);
+  }) || null;
+}
+
+function xhsCaptureSource(state, capture = {}) {
+  const author = normalizedTitle(capture.author);
+  return sourceForUrl(state, capture.sourceProfileUrl || "")
+    || sourceForUrl(state, capture.captureUrl || "")
+    || (state.sources || []).find((source) => (
+      source.platform === "xiaohongshu"
+      && author
+      && normalizedTitle(source.account || source.name) === author
+    ))
+    || null;
+}
+
+function persistXhsGuestCapture(state, result = {}) {
+  const capture = result.capture;
+  if (!capture || typeof capture !== "object") throw new Error("guest capture did not return detail evidence");
+  const timestamp = now();
+  const source = xhsCaptureSource(state, capture);
+  let signal = xhsCaptureSignal(state, capture);
+  let created = false;
+
+  if (!signal) {
+    const noteId = String(capture.noteId || platformContentId("xiaohongshu", capture.captureUrl || ""));
+    const base = normalizeDropRecords({
+      state,
+      signals: [{
+        sourceId: source?.id || "",
+        platform: "xiaohongshu",
+        author: capture.author || source?.account || source?.name || "",
+        authorId: capture.authorId || "",
+        sourceProfileUrl: capture.sourceProfileUrl || "",
+        title: capture.title || `小红书笔记 ${noteId}`,
+        url: capture.captureUrl,
+        noteId,
+        coverUrl: capture.coverUrl || "",
+        publishedAt: capture.publishedAt || "",
+        engagement: capture.engagement || null,
+        note: "小红书游客可见详情采集",
+        contentText: capture.bodyText || "",
+        captureState: capture.captureState || "captured-public",
+        evidenceState: "unverified"
+      }],
+      materials: []
+    });
+    if (!base.signals.length) throw new Error("guest capture did not contain a valid Xiaohongshu note");
+    const totals = importRecords(state, "signals", base.signals);
+    created = totals.added > 0;
+    signal = xhsCaptureSignal(state, capture);
+  }
+  if (!signal) throw new Error("captured Xiaohongshu note could not be merged into signals");
+
+  const normalized = normalizeDetailCapture(signal, capture, timestamp);
+  const snapshot = {
+    id: id("snapshot"),
+    sourceId: source?.id || signal.sourceId || "",
+    signalId: signal.id,
+    url: normalized.capture.captureUrl,
+    capturedAt: timestamp,
+    format: "xhs-guest-chrome",
+    context: {
+      captureScope: "guest-visible-detail-page",
+      noteId: normalized.capture.noteId,
+      mediaCount: normalized.capture.mediaItems.length,
+      transcriptStatus: normalized.capture.transcriptStatus,
+      localOnly: true,
+      rawPageTextMayContainPrivateState: true,
+      privateApiCalled: false,
+      mediaDownloaded: false,
+      credentialsIncluded: false
+    },
+    content: JSON.stringify(normalized.capture, null, 2).slice(0, 500000)
+  };
+  state.rawSnapshots.unshift(snapshot);
+
+  const existingMediaItems = Array.isArray(signal.mediaItems) ? signal.mediaItems : [];
+  const mediaItems = [...existingMediaItems, ...normalized.capture.mediaItems]
+    .filter((item, index, items) => item?.url && items.findIndex((other) => other.url === item.url) === index)
+    .slice(0, 50);
+  const nextContentText = normalized.patch.contentText || signal.contentText || "";
+  Object.assign(signal, normalized.patch, {
+    mediaItems,
+    imageDescriptions: mediaDescriptions(mediaItems, signal.imageDescriptions),
+    dataPointCandidates: nextContentText
+      ? extractDataPointCandidates([nextContentText])
+      : (signal.dataPointCandidates || []),
+    evidenceState: "unverified",
+    rawSnapshotId: snapshot.id,
+    updatedAt: timestamp
+  });
+  if (source) {
+    source.lastDetailCaptureAt = timestamp;
+    source.lastRunStatus = "ok";
+    source.lastRunAt = timestamp;
+  }
+  refreshEngagementMetrics(state);
+
+  const evidencePackage = (state.evidencePackages || []).find((item) => item.signalId === signal.id) || null;
+  if (evidencePackage) {
+    evidencePackage.verification = {
+      state: "unverified",
+      checkedAt: "",
+      checkedBy: "",
+      note: "小红书详情已更新，原始证据包需要重建并重新人工核对。"
+    };
+    evidencePackage.updatedAt = timestamp;
+  }
+  return {
+    signal,
+    snapshot,
+    created,
+    transcriptStatus: normalized.capture.transcriptStatus,
+    mediaCount: mediaItems.length,
+    warnings: normalized.capture.warnings
+  };
+}
+
 function firstUrlInText(value) {
   const match = String(value || "").match(/https?:\/\/[^\s<>"')，。]+/i);
   return normalizeUrl(match?.[0] || "");
@@ -1696,6 +2057,7 @@ function detectSourcePlatform(url) {
   if (hostname.endsWith("xiaohongshu.com") || hostname === "xhslink.cn") return "xiaohongshu";
   if (hostname === "x.com" || hostname === "twitter.com") return "x";
   if (hostname.endsWith("douyin.com")) return "douyin";
+  if (hostname.endsWith("bilibili.com") || hostname === "b23.tv") return "bilibili";
   if (hostname.endsWith("qq.com")) return "wechat";
   return "other";
 }
@@ -1710,17 +2072,18 @@ function sourceIntakeCount(text, pattern) {
   return positiveCount(`${match[1]}${match[2] || ""}`);
 }
 
-async function importSourceIntake(state, text) {
-  const rawUrl = firstUrlInText(text);
+async function importSourceIntake(state, text, options = {}) {
+  const rawUrl = options.inputUrl || firstUrlInText(text);
   if (!rawUrl) throw new Error("paste a source URL or platform share text with a URL");
-  const url = await resolveSourceIntakeUrl(rawUrl);
+  const url = options.canonicalUrl || await resolveSourceIntakeUrl(rawUrl);
   const platform = detectSourcePlatform(url);
-  const name = sourceIntakeName(text);
+  const name = String(options.name || sourceIntakeName(text) || "").trim();
   const profileFollowers = sourceIntakeCount(text, /([\d,.]+)\s*(万|亿|[kK])?\s*(?:个)?粉丝/);
   const profileNoteCount = sourceIntakeCount(text, /([\d,.]+)\s*(万|亿|[kK])?\s*(?:篇)?笔记/);
   const profileEngagement = sourceIntakeCount(text, /([\d,.]+)\s*(万|亿|[kK])?\s*\+?\s*(?:次)?(?:获)?赞与收藏/);
   const isXhsProfile = platform === "xiaohongshu"
     && /\/user\/profile\/[A-Za-z0-9]+/.test(new URL(url).pathname);
+  const isBilibili = platform === "bilibili";
 
   if (platform === "xiaohongshu" && !isXhsProfile) {
     throw new Error("Xiaohongshu source intake currently expects a blogger profile page");
@@ -1735,8 +2098,10 @@ async function importSourceIntake(state, text) {
       account: name,
       role: "benchmark",
       url,
-      checkFrequency: platform === "xiaohongshu" ? "daily" : "weekly",
-      collectionMethod: platform === "xiaohongshu" ? "browser-assisted" : "public-page",
+      checkFrequency: platform === "xiaohongshu" || isBilibili ? "daily" : "weekly",
+      collectionMethod: platform === "xiaohongshu"
+        ? "browser-assisted"
+        : isBilibili ? "bilibili-public" : "public-page",
       dataBoundary: platform === "xiaohongshu" ? "manual-copy" : "public",
       profileFollowers,
       profileEngagement,
@@ -1778,8 +2143,118 @@ async function importSourceIntake(state, text) {
     source,
     nextAction: platform === "xiaohongshu"
       ? "打开这个主页，手动滚动到目标范围，点击采集书签；需要补全历史时继续向下滚动并重复点击。"
+      : platform === "bilibili"
+        ? "每日自动读取公开视频元数据和字幕轨；412/403 时保留 blocked 并转人工。"
       : "先运行一次公开页面采集；如平台要求登录，改用平台导出或手动导入。"
   };
+}
+
+const captureMetadataAliases = new Map(Object.entries({
+  title: "title",
+  "标题": "title",
+  "题目": "title",
+  url: "url",
+  link: "url",
+  sourceurl: "url",
+  "链接": "url",
+  "原文链接": "url",
+  "来源链接": "url",
+  "作品链接": "url",
+  author: "author",
+  "作者": "author",
+  "账号": "author",
+  platform: "platform",
+  "平台": "platform",
+  "来源平台": "platform",
+  coverurl: "coverurl",
+  cover: "coverurl",
+  "封面": "coverurl",
+  "封面链接": "coverurl",
+  transcript: "transcript",
+  transcripttext: "transcript",
+  "逐字稿": "transcript",
+  "口播稿": "transcript",
+  "字幕": "transcript",
+  body: "body",
+  contenttext: "body",
+  "正文": "body",
+  "简介": "body",
+  description: "body",
+  sourceid: "sourceid",
+  "来源id": "sourceid",
+  publishedat: "publishedat",
+  date: "publishedat",
+  "发布时间": "publishedat",
+  "日期": "publishedat",
+  engagement: "engagement",
+  "互动": "engagement",
+  "点赞": "engagement",
+  kind: "kind",
+  "类别": "kind",
+  note: "note",
+  "备注": "note"
+}));
+
+function captureMetadataKey(label = "") {
+  const key = String(label).trim().toLowerCase().replace(/[\s_-]+/g, "");
+  return captureMetadataAliases.get(key) || "";
+}
+
+function splitLeadingCaptureMetadata(text = "") {
+  const metadata = {};
+  const bodyLines = [];
+  const transcriptLines = [];
+  let readingBody = false;
+  let readingTranscript = false;
+  for (const line of String(text || "").split(/\r?\n/)) {
+    if (readingTranscript) {
+      transcriptLines.push(line);
+      continue;
+    }
+    if (readingBody) {
+      bodyLines.push(line);
+      continue;
+    }
+    if (!line.trim()) continue;
+    const match = line.match(/^\s*([^:：]{1,30})\s*[:：]\s*(.*)$/);
+    const key = match ? captureMetadataKey(match[1]) : "";
+    if (!key) {
+      readingBody = true;
+      bodyLines.push(line);
+      continue;
+    }
+    const value = match[2].trim();
+    if (key === "transcript") {
+      readingTranscript = true;
+      if (value) transcriptLines.push(value);
+      continue;
+    }
+    metadata[key] = value;
+  }
+  return {
+    metadata,
+    body: bodyLines.join("\n").trim(),
+    transcript: transcriptLines.join("\n").trim(),
+    hasTranscriptLabel: transcriptLines.length > 0
+  };
+}
+
+function signalUrlFromRecord(record = {}) {
+  return record.url || record.sourceUrl || record.link || record.source_url || "";
+}
+
+function transcriptTextFromRecord(record = {}) {
+  const explicit = record.transcriptText
+    ?? record.transcript
+    ?? record.transcript_text
+    ?? record.subtitleText
+    ?? record.subtitle_text;
+  if (explicit !== undefined && explicit !== null && String(explicit).trim()) return String(explicit).trim();
+  if (record.manualTranscript === true) {
+    const fallback = record.body ?? record.contentText ?? record.description ?? "";
+    if (String(fallback).trim()) return String(fallback).trim();
+  }
+  return "";
 }
 
 function parseDropFile(fileName, text) {
@@ -1789,58 +2264,63 @@ function parseDropFile(fileName, text) {
     if (Array.isArray(parsed)) {
       return {
         context: {},
-        signals: parsed.filter((item) => item && typeof item === "object" && item.url),
-        materials: parsed.filter((item) => item && typeof item === "object" && item.excerpt && !item.url)
+        signals: parsed.filter((item) => item && typeof item === "object" && signalUrlFromRecord(item)),
+        materials: parsed.filter((item) => (
+          item
+          && typeof item === "object"
+          && item.excerpt
+          && !signalUrlFromRecord(item)
+        ))
       };
     }
     if (!parsed || typeof parsed !== "object") throw new Error("JSON must be an array or object");
     return {
       context: parsed,
-      signals: Array.isArray(parsed.signals) ? parsed.signals : parsed.url ? [parsed] : [],
+      signals: Array.isArray(parsed.signals) ? parsed.signals : signalUrlFromRecord(parsed) ? [parsed] : [],
       materials: Array.isArray(parsed.materials) ? parsed.materials : parsed.excerpt ? [parsed] : []
     };
   }
 
   if (!extension || extension === ".md" || extension === ".txt") {
-    const lines = text.split(/\r?\n/);
-    const metadata = {};
-    const bodyLines = [];
-    for (const line of lines) {
-      const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
-      if (match && bodyLines.length === 0) {
-        metadata[match[1].toLowerCase()] = match[2].trim();
-        continue;
-      }
-      bodyLines.push(line);
-    }
-
-    let body = bodyLines.join("\n").trim();
+    const parsed = splitLeadingCaptureMetadata(text);
+    const metadata = parsed.metadata;
+    let body = parsed.body;
     let title = metadata.title || "";
     const heading = body.match(/^#\s+(.+)$/m);
     if (heading) {
       title = title || heading[1].trim();
       body = body.replace(heading[0], "").trim();
     }
-    const url = metadata.url || metadata.sourceurl || body.match(/https?:\/\/[^\s)]+/)?.[0] || "";
+    const urls = [...body.matchAll(/https?:\/\/[^\s<>"')]+/g)].map((match) => match[0]);
+    const preferredUrl = urls.find((value) => !/xhslink\.(?:cn|com)/i.test(value)) || urls[0] || "";
+    const url = metadata.url || preferredUrl;
+    const labeledTranscript = parsed.transcript;
     const kind = String(metadata.kind || "").toLowerCase();
-    const type = String(metadata.type || "").toLowerCase();
     const materialTypes = new Set(["opinion", "case", "data", "quote", "hot-comment", "counter-example", "lead"]);
     const context = {
       sourceId: metadata.sourceid || "",
       platform: metadata.platform || "",
       author: metadata.author || ""
     };
+    const inferredTranscript = !labeledTranscript
+      && !metadata.body
+      && Boolean(url)
+      && body.replace(/https?:\/\/\S+/g, "").trim().length >= 60
+      ? body
+      : "";
+    const transcriptText = labeledTranscript || inferredTranscript;
+    const contentText = metadata.body || (transcriptText ? "" : body);
 
-    if (kind === "material" || (!kind && !url && body)) {
+    if (kind === "material" || (!kind && !url && (transcriptText || body))) {
       return {
         context,
         signals: [],
         materials: [{
           ...metadata,
-          type: materialTypes.has(type) ? type : "opinion",
+          type: materialTypes.has(kind) || !kind ? "opinion" : kind,
           possibleUse: metadata.possibleuse || metadata.use || "evidence",
           sourceUrl: url,
-          excerpt: body
+          excerpt: transcriptText || body
         }]
       };
     }
@@ -1851,14 +2331,25 @@ function parseDropFile(fileName, text) {
       signals: [{
         title,
         url,
+        coverUrl: metadata.coverurl || "",
         engagement: metadata.engagement || null,
         author: metadata.author || "",
         platform: metadata.platform || "",
         publishedAt: metadata.publishedat || "",
-        note: body ? "本地文本信号，正文已保存" : metadata.note || "",
-        contentText: body,
+        note: transcriptText
+          ? "用户提供逐字稿，正文与来源已保存；逐字稿仍需人工核对"
+          : body ? "本地文本信号，正文已保存" : metadata.note || "",
+        contentText,
+        ...(transcriptText ? {
+          transcriptText,
+          manualTranscript: true,
+          transcriptStatus: "captured",
+          transcriptSource: "user-provided",
+          transcriptModel: "user-provided",
+          evidenceState: "unverified"
+        } : {}),
         imageDescriptions: [],
-        dataPointCandidates: extractDataPointCandidates([body])
+        dataPointCandidates: extractDataPointCandidates([contentText || transcriptText])
       }],
       materials: []
     };
@@ -1877,22 +2368,29 @@ function platformFromUrl(value = "") {
   })();
   if (host.includes("xiaohongshu")) return "xiaohongshu";
   if (host.includes("douyin")) return "douyin";
+  if (host.includes("bilibili.com") || host.includes("b23.tv")) return "bilibili";
   if (host.includes("x.com") || host.includes("twitter.com")) return "x";
   if (host.includes("weixin.qq.com") || host.includes("mp.weixin.qq.com")) return "wechat";
   return "other";
 }
 
 function sourceForUrl(state, value = "") {
-  let host = "";
+  let target;
   try {
-    host = new URL(value).hostname.toLowerCase();
+    target = new URL(value);
   } catch {
-    host = "";
+    return null;
   }
-  if (!host) return null;
+  const targetCanonical = canonicalSignalUrl(target.toString());
+  const targetProfileId = target.hostname.endsWith("xiaohongshu.com")
+    ? target.pathname.match(/^\/user\/profile\/([A-Za-z0-9_-]+)\/?$/)?.[1] || ""
+    : "";
   return (state.sources || []).find((source) => {
     try {
-      return new URL(source.url).hostname.toLowerCase() === host;
+      const candidate = new URL(source.url);
+      if (targetCanonical && canonicalSignalUrl(candidate.toString()) === targetCanonical) return true;
+      if (!targetProfileId || !candidate.hostname.endsWith("xiaohongshu.com")) return false;
+      return candidate.pathname.match(/^\/user\/profile\/([A-Za-z0-9_-]+)\/?$/)?.[1] === targetProfileId;
     } catch {
       return false;
     }
@@ -1905,20 +2403,13 @@ function parseLooseCapture(state, text) {
     return parseDropFile("capture.json", trimmed);
   }
 
-  const lines = trimmed.split(/\r?\n/);
-  const metadata = {};
-  const bodyLines = [];
-  for (const line of lines) {
-    const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (match && bodyLines.length === 0) {
-      metadata[match[1].toLowerCase()] = match[2].trim();
-      continue;
-    }
-    bodyLines.push(line);
-  }
+  const parsed = splitLeadingCaptureMetadata(trimmed);
+  const metadata = parsed.metadata;
+  const bodyLines = parsed.body.split(/\r?\n/);
 
   const urls = [...trimmed.matchAll(/https?:\/\/[^\s<>"')]+/g)].map((match) => match[0]);
-  const primaryUrl = metadata.url || metadata.sourceurl || urls[0] || "";
+  const preferredUrl = urls.find((value) => !/xhslink\.(?:cn|com)/i.test(value)) || urls[0] || "";
+  const primaryUrl = metadata.url || preferredUrl;
   const source = (state.sources || []).find((item) => item.id === (metadata.sourceid || "")) || sourceForUrl(state, primaryUrl);
   const platform = metadata.platform || source?.platform || platformFromUrl(primaryUrl);
   const contentLines = bodyLines
@@ -1934,19 +2425,38 @@ function parseLooseCapture(state, text) {
     || metadata.engagement
     || null;
   const noteLines = contentLines.filter((line) => line !== title);
+  const inferredTranscript = !parsed.transcript
+    && !metadata.body
+    && Boolean(primaryUrl)
+    && noteLines.join("\n").length >= 60
+    ? noteLines.join("\n")
+    : "";
+  const transcriptText = parsed.transcript || inferredTranscript;
+  const contentText = metadata.body || (transcriptText ? "" : noteLines.join("\n"));
   const signals = urls.length || primaryUrl
     ? [{
-        sourceId: source?.id || metadata.sourceId || "",
+        sourceId: source?.id || metadata.sourceid || "",
         platform,
         author: metadata.author || source?.account || source?.name || "",
         title,
         url: primaryUrl,
+        coverUrl: metadata.coverurl || "",
         engagement: parseCount(engagementValue),
         publishedAt: metadata.publishedat || metadata.date || "",
-        note: noteLines.length ? "快速粘贴文本，正文已保存" : metadata.note || "快速粘贴自动解析",
-        contentText: noteLines.join("\n"),
+        note: transcriptText
+          ? "用户提供逐字稿，正文与来源已保存；逐字稿仍需人工核对"
+          : noteLines.length ? "快速粘贴文本，正文已保存" : metadata.note || "快速粘贴自动解析",
+        contentText,
+        ...(transcriptText ? {
+          transcriptText,
+          manualTranscript: true,
+          transcriptStatus: "captured",
+          transcriptSource: "user-provided",
+          transcriptModel: "user-provided",
+          evidenceState: "unverified"
+        } : {}),
         imageDescriptions: [],
-        dataPointCandidates: extractDataPointCandidates([noteLines.join("\n")])
+        dataPointCandidates: extractDataPointCandidates([contentText || transcriptText])
       }]
     : [];
 
@@ -1990,7 +2500,7 @@ function normalizeDropRecords({ state, signals = [], materials = [], context = {
       invalidSignals += 1;
       continue;
     }
-    const url = normalizeUrl(record.url);
+    const url = normalizeUrl(signalUrlFromRecord(record));
     if (!url) {
       invalidSignals += 1;
       continue;
@@ -1998,21 +2508,37 @@ function normalizeDropRecords({ state, signals = [], materials = [], context = {
     const sourceId = record.sourceId || context.sourceId || "";
     const source = (state.sources || []).find((item) => item.id === sourceId);
     const engagement = parseCount(record.engagement);
+    const transcriptText = transcriptTextFromRecord(record);
+    const manualTranscript = Boolean(transcriptText);
+    const title = String(record.title || "").trim()
+      || (manualTranscript ? `未命名逐字稿 · ${platformFromUrl(url)}` : "");
     normalizedSignals.push({
       ...record,
       sourceId: source ? source.id : "",
       url,
-      platform: record.platform || source?.platform || context.platform || "other",
+      platform: record.platform || source?.platform || context.platform || platformFromUrl(url) || "other",
       author: record.author || source?.account || source?.name || context.author || "",
+      title,
+      coverUrl: normalizeUrl(record.coverUrl || record.cover || "") || "",
       engagement,
       authorMedianEngagement: source?.authorMedianEngagement ?? null,
       relativeMultiple: null,
       automationTier: "needs-review",
       capturedAt: record.capturedAt || now(),
       seen: false,
-      disposition: "inbox",
-      note: record.note || "本地投递箱自动入库",
-      contentText: String(record.contentText || "").slice(0, 100000),
+      disposition: manualTranscript ? "material" : record.disposition || "inbox",
+      note: manualTranscript
+        ? `${String(record.note || "用户提供逐字稿").replace(/[。；;]+$/, "")}；仍需人工核对`
+        : record.note || "本地投递箱自动入库",
+      contentText: String(record.contentText || record.body || record.description || "").slice(0, 100000),
+      ...(manualTranscript ? {
+        transcriptText: transcriptText.slice(0, 500000),
+        transcriptStatus: "captured",
+        transcriptSource: "user-provided",
+        transcriptModel: "user-provided",
+        transcriptCapturedAt: record.transcriptCapturedAt || now(),
+        evidenceState: "unverified"
+      } : {}),
       imageDescriptions: Array.isArray(record.imageDescriptions)
         ? record.imageDescriptions
           .filter((item) => item && typeof item === "object")
@@ -2056,9 +2582,9 @@ function normalizeDropRecords({ state, signals = [], materials = [], context = {
   return { signals: normalizedSignals, materials: normalizedMaterials, invalidSignals, invalidMaterials };
 }
 
-async function archiveDropFile(fileName, targetDir) {
+async function archiveDropFile(sourceDir, fileName, targetDir) {
   await fs.mkdir(targetDir, { recursive: true });
-  const source = path.join(dropDir, fileName);
+  const source = path.join(sourceDir, fileName);
   const extension = path.extname(fileName);
   const stem = path.basename(fileName, extension);
   let target = path.join(targetDir, fileName);
@@ -2071,6 +2597,168 @@ async function archiveDropFile(fileName, targetDir) {
   await fs.rename(source, target);
 }
 
+async function listDropFiles(rootDir) {
+  const entries = await fs.readdir(rootDir, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile() && dropExtensions.has(path.extname(entry.name).toLowerCase()))
+    .filter((entry) => entry.name.toLowerCase() !== "readme.md")
+    .map((entry) => entry.name)
+    .slice(0, 20);
+}
+
+async function processDropFile({
+  state,
+  sourceDir,
+  processedDir,
+  failedDir,
+  fileName,
+  sourceId,
+  trigger,
+  useContentLedger = false
+}) {
+  const filePath = path.join(sourceDir, fileName);
+  const statBefore = await fs.stat(filePath);
+  const fingerprint = `${statBefore.size}:${statBefore.mtimeMs}`;
+  const stabilityKey = path.resolve(filePath);
+  if (dropFileStability.get(stabilityKey) !== fingerprint) {
+    dropFileStability.set(stabilityKey, fingerprint);
+    const pendingRun = {
+      id: id("run"),
+      sourceId,
+      status: "pending",
+      trigger,
+      startedAt: now(),
+      finishedAt: now(),
+      found: 0,
+      created: 0,
+      duplicates: 0,
+      failureReason: "file is still changing",
+      nextAction: "等待文件写入稳定后自动重试",
+      fileName
+    };
+    finalizeCollectionRun(pendingRun);
+    state.collectionRuns.unshift(pendingRun);
+    await writeState(state);
+    return { fileName, status: "pending", error: "file is still changing" };
+  }
+
+  dropFileStability.delete(stabilityKey);
+  const run = {
+    id: id("run"),
+    sourceId,
+    status: "running",
+    trigger,
+    startedAt: now(),
+    finishedAt: "",
+    found: 0,
+    created: 0,
+    duplicates: 0,
+    failureReason: "",
+    nextAction: "",
+    fileName
+  };
+  finalizeCollectionRun(run);
+  state.collectionRuns.unshift(run);
+
+  try {
+    const stat = await fs.stat(filePath);
+    if (stat.size > 2 * 1024 * 1024) throw new Error("file exceeds 2 MB");
+    const text = await fs.readFile(filePath, "utf8");
+    const statAfter = await fs.stat(filePath);
+    if (statAfter.size !== stat.size || statAfter.mtimeMs !== stat.mtimeMs) {
+      dropFileStability.set(stabilityKey, `${statAfter.size}:${statAfter.mtimeMs}`);
+      run.status = "pending";
+      run.failureReason = "file changed while being read";
+      run.nextAction = "等待文件写入稳定后自动重试";
+      finalizeCollectionRun(run);
+      await writeState(state);
+      return { fileName, status: "pending", error: run.failureReason };
+    }
+
+    const contentHash = crypto.createHash("sha256").update(text).digest("hex");
+    if (useContentLedger) {
+      const previous = (state.cloudInboxLedger || []).find((item) => item.sha256 === contentHash);
+      if (previous) {
+        run.status = "ok-no-new";
+        run.duplicates = 1;
+        run.nextAction = "内容哈希已处理，归档到 Inbox/Processed";
+        finalizeCollectionRun(run);
+        await writeState(state);
+        try {
+          await archiveDropFile(sourceDir, fileName, processedDir);
+        } catch (archiveError) {
+          run.archiveError = archiveError.message;
+          await writeState(state);
+        }
+        return { fileName, status: run.status, duplicates: 1, duplicateContent: true };
+      }
+    }
+
+    state.rawSnapshots.unshift({
+      id: id("snapshot"),
+      runId: run.id,
+      sourceId,
+      url: sourceId === "drive-inbox" ? `drive-inbox://${fileName}` : `drop://${fileName}`,
+      capturedAt: now(),
+      format: `${sourceId}${path.extname(fileName).toLowerCase()}`,
+      content: text.slice(0, 500000)
+    });
+
+    const parsed = parseDropFile(fileName, text);
+    const normalized = normalizeDropRecords({ state, ...parsed });
+    if (!normalized.signals.length && !normalized.materials.length) {
+      throw new Error("drop file has no valid signal or material");
+    }
+    const signalTotals = importRecords(state, "signals", normalized.signals);
+    const materialTotals = importRecords(state, "materials", normalized.materials);
+
+    run.found = normalized.signals.length + normalized.materials.length;
+    run.created = signalTotals.added + materialTotals.added;
+    run.duplicates = signalTotals.merged + materialTotals.merged;
+    run.status = run.created > 0 ? "ok" : "ok-no-new";
+    run.nextAction = run.created > 0 ? "到 Inbox / 素材库查看" : "无新增，已归档";
+    finalizeCollectionRun(run);
+
+    if (useContentLedger) {
+      state.cloudInboxLedger = [{
+        sha256: contentHash,
+        fileName,
+        status: run.status,
+        created: run.created,
+        duplicates: run.duplicates,
+        processedAt: now()
+      }, ...(state.cloudInboxLedger || [])].slice(0, 5000);
+    }
+    await writeState(state);
+    try {
+      await archiveDropFile(sourceDir, fileName, processedDir);
+    } catch (archiveError) {
+      run.archiveError = archiveError.message;
+      await writeState(state);
+    }
+    return {
+      fileName,
+      status: run.status,
+      created: run.created,
+      duplicates: run.duplicates,
+      invalid: normalized.invalidSignals + normalized.invalidMaterials
+    };
+  } catch (error) {
+    run.status = "failed";
+    run.failureReason = error.message;
+    run.nextAction = "查看 drops/failed 中的文件并修正格式";
+    finalizeCollectionRun(run);
+    await writeState(state);
+    try {
+      await archiveDropFile(sourceDir, fileName, failedDir);
+    } catch (archiveError) {
+      run.failureReason += `; archive failed: ${archiveError.message}`;
+      await writeState(state);
+    }
+    return { fileName, status: "failed", error: error.message };
+  }
+}
+
 async function runDropFolderScan(trigger = "automatic", allowDisabled = false) {
   try {
     const state = await readState();
@@ -2079,120 +2767,65 @@ async function runDropFolderScan(trigger = "automatic", allowDisabled = false) {
     }
 
     await Promise.all([fs.mkdir(dropDir, { recursive: true }), fs.mkdir(dropProcessedDir, { recursive: true }), fs.mkdir(dropFailedDir, { recursive: true })]);
-    const entries = await fs.readdir(dropDir, { withFileTypes: true });
-    const files = entries
-      .filter((entry) => entry.isFile() && dropExtensions.has(path.extname(entry.name).toLowerCase()))
-      .filter((entry) => entry.name.toLowerCase() !== "readme.md")
-      .map((entry) => entry.name)
-      .slice(0, 0 + 20);
     const results = [];
-    let changed = false;
-
-    for (const fileName of files) {
-      const filePath = path.join(dropDir, fileName);
-      const statBefore = await fs.stat(filePath);
-      const fingerprint = `${statBefore.size}:${statBefore.mtimeMs}`;
-      if (dropFileStability.get(fileName) !== fingerprint) {
-        dropFileStability.set(fileName, fingerprint);
-        const pendingRun = {
-          id: id("run"),
-          sourceId: "local-drop",
-          status: "pending",
-          trigger,
-          startedAt: now(),
-          finishedAt: now(),
-          found: 0,
-          created: 0,
-          duplicates: 0,
-          failureReason: "file is still changing",
-          nextAction: "等待文件写入稳定后自动重试",
-          fileName
-        };
-        finalizeCollectionRun(pendingRun);
-        state.collectionRuns.unshift(pendingRun);
-        changed = true;
-        await writeState(state);
-        results.push({ fileName, status: "pending", error: "file is still changing" });
-        continue;
-      }
-      dropFileStability.delete(fileName);
-      const run = {
-        id: id("run"),
+    const localFiles = await listDropFiles(dropDir);
+    for (const fileName of localFiles) {
+      results.push(await processDropFile({
+        state,
+        sourceDir: dropDir,
+        processedDir: dropProcessedDir,
+        failedDir: dropFailedDir,
+        fileName,
         sourceId: "local-drop",
-        status: "running",
-        trigger,
-        startedAt: now(),
-        finishedAt: "",
-        found: 0,
-        created: 0,
-        duplicates: 0,
-        failureReason: "",
-        nextAction: "",
-        fileName
-      };
-      finalizeCollectionRun(run);
-      state.collectionRuns.unshift(run);
-      changed = true;
+        trigger
+      }));
+    }
 
+    let cloudInbox = { configured: false, total: 0, results: [] };
+    if (state.settings.driveRoot) {
       try {
-        const stat = await fs.stat(filePath);
-        if (stat.size > 2 * 1024 * 1024) throw new Error("file exceeds 2 MB");
-        const text = await fs.readFile(filePath, "utf8");
-        const statAfter = await fs.stat(filePath);
-        if (statAfter.size !== stat.size || statAfter.mtimeMs !== stat.mtimeMs) {
-          dropFileStability.set(fileName, `${statAfter.size}:${statAfter.mtimeMs}`);
-          run.status = "pending";
-          run.failureReason = "file changed while being read";
-          run.nextAction = "等待文件写入稳定后自动重试";
-          finalizeCollectionRun(run);
-          await writeState(state);
-          results.push({ fileName, status: "pending", error: run.failureReason });
-          continue;
+        const driveRoot = await validateDriveRoot(state.settings.driveRoot);
+        const cloudInboxDir = path.join(driveRoot, cloudInboxRelativeDir);
+        const cloudProcessedDir = path.join(cloudInboxDir, "Processed");
+        const cloudFailedDir = path.join(cloudInboxDir, "Failed");
+        await Promise.all([
+          fs.mkdir(cloudInboxDir, { recursive: true }),
+          fs.mkdir(cloudProcessedDir, { recursive: true }),
+          fs.mkdir(cloudFailedDir, { recursive: true })
+        ]);
+        const cloudFiles = await listDropFiles(cloudInboxDir);
+        const cloudResults = [];
+        for (const fileName of cloudFiles) {
+          cloudResults.push(await processDropFile({
+            state,
+            sourceDir: cloudInboxDir,
+            processedDir: cloudProcessedDir,
+            failedDir: cloudFailedDir,
+            fileName,
+            sourceId: "drive-inbox",
+            trigger,
+            useContentLedger: true
+          }));
         }
-        state.rawSnapshots.unshift({
-          id: id("snapshot"),
-          runId: run.id,
-          sourceId: "local-drop",
-          url: `drop://${fileName}`,
-          capturedAt: now(),
-          format: `local-drop${path.extname(fileName).toLowerCase()}`,
-          content: text.slice(0, 500000)
-        });
-
-        const parsed = parseDropFile(fileName, text);
-        const normalized = normalizeDropRecords({ state, ...parsed });
-        if (!normalized.signals.length && !normalized.materials.length) {
-          throw new Error("drop file has no valid signal or material");
-        }
-        const signalTotals = importRecords(state, "signals", normalized.signals);
-        const materialTotals = importRecords(state, "materials", normalized.materials);
-        refreshEngagementMetrics(state);
-
-        run.found = normalized.signals.length + normalized.materials.length;
-        run.created = signalTotals.added + materialTotals.added;
-        run.duplicates = signalTotals.merged + materialTotals.merged;
-        run.status = run.created > 0 ? "ok" : "ok-no-new";
-        run.nextAction = run.created > 0 ? "到 Inbox / 素材库查看" : "无新增，已归档";
-        finalizeCollectionRun(run);
-        await writeState(state);
-        await archiveDropFile(fileName, dropProcessedDir);
-        results.push({ fileName, status: run.status, created: run.created, duplicates: run.duplicates, invalid: normalized.invalidSignals + normalized.invalidMaterials });
+        cloudInbox = {
+          configured: true,
+          root: cloudInboxDir,
+          total: cloudResults.length,
+          results: cloudResults
+        };
+        results.push(...cloudResults);
       } catch (error) {
-        run.status = "failed";
-        run.failureReason = error.message;
-        run.nextAction = "查看 drops/failed 中的文件并修正格式";
-        finalizeCollectionRun(run);
-        await writeState(state);
-        try {
-          await archiveDropFile(fileName, dropFailedDir);
-        } catch (archiveError) {
-          run.failureReason += `; archive failed: ${archiveError.message}`;
-        }
-        results.push({ fileName, status: "failed", error: error.message });
+        cloudInbox = {
+          configured: true,
+          total: 0,
+          results: [],
+          error: error.message
+        };
       }
     }
 
-    changed = refreshMorningBrief(state) || changed;
+    refreshEngagementMetrics(state);
+    const changed = refreshMorningBrief(state);
     if (changed) await writeState(state);
     return {
       ok: true,
@@ -2200,7 +2833,8 @@ async function runDropFolderScan(trigger = "automatic", allowDisabled = false) {
       total: results.length,
       created: results.reduce((total, item) => total + (item.created || 0), 0),
       failed: results.filter((item) => item.status === "failed").length,
-      results
+      results,
+      cloudInbox
     };
   } finally {
   }
@@ -2278,6 +2912,255 @@ async function runQuickCapture(text, preferredSourceId = "") {
   }
 }
 
+function sourceForIntakeAuthor(state, platform, author) {
+  const normalizedAuthor = normalizedTitle(author);
+  if (!normalizedAuthor) return null;
+  return (state.sources || []).find((source) => (
+    source.platform === platform
+    && normalizedTitle(source.account || source.name) === normalizedAuthor
+  )) || null;
+}
+
+function captureBatchIntakeNote(state, run, queueItem, classification) {
+  const parsed = parseLooseCapture(state, queueItem.rawText);
+  const parsedSignal = parsed.signals[0] || {};
+  const matchedSource = sourceForUrl(state, classification.canonicalUrl || queueItem.url)
+    || sourceForIntakeAuthor(state, "xiaohongshu", queueItem.authorCandidate);
+  const incomingSignal = {
+    ...parsedSignal,
+    sourceId: parsedSignal.sourceId || matchedSource?.id || "",
+    platform: "xiaohongshu",
+    author: queueItem.authorCandidate || parsedSignal.author || matchedSource?.account || matchedSource?.name || "",
+    title: queueItem.titleCandidate || parsedSignal.title || `小红书笔记 ${classification.noteId}`,
+    url: classification.canonicalUrl || queueItem.url,
+    noteId: classification.noteId,
+    note: "分享文本已登记；标题和正文来自可见分享信息，封面、详情证据与逐字稿仍需浏览器补采",
+    captureState: "share-metadata",
+    evidenceState: "unverified",
+    capturedAt: now()
+  };
+  const normalized = normalizeDropRecords({ state, signals: [incomingSignal], materials: [] });
+  const totals = importRecords(state, "signals", normalized.signals);
+  const signal = (state.signals || []).find((item) => (
+    (classification.noteId && item.noteId === classification.noteId)
+    || canonicalSignalUrl(item.url) === canonicalSignalUrl(incomingSignal.url)
+  )) || null;
+  state.rawSnapshots.unshift({
+    id: id("snapshot"),
+    runId: run.id,
+    sourceId: matchedSource?.id || "",
+    signalId: signal?.id || "",
+    url: incomingSignal.url,
+    capturedAt: now(),
+    format: "share-text",
+    context: {
+      captureScope: "user-pasted-share-text",
+      noteId: classification.noteId,
+      mediaDownloaded: false,
+      privateApiCalled: false
+    },
+    content: queueItem.rawText.slice(0, 500000)
+  });
+  run.found += 1;
+  run.created += totals.added;
+  run.duplicates += totals.merged;
+  return { signal, totals, matchedSource };
+}
+
+function intakeQueueSummary(queue) {
+  return queue.reduce((summary, item) => {
+    summary.total += 1;
+    summary[item.status] = (summary[item.status] || 0) + 1;
+    return summary;
+  }, {
+    total: 0,
+    queued: 0,
+    registered: 0,
+    captured: 0,
+    "needs-browser": 0,
+    duplicate: 0,
+    blocked: 0,
+    failed: 0
+  });
+}
+
+async function runBatchSourceIntake(state, text) {
+  const parsedItems = parseBatchIntakeText(text);
+  if (!parsedItems.length) {
+    throw new Error("未识别到可处理的公开链接");
+  }
+
+  const timestamp = now();
+  const batch = {
+    id: id("intake-batch"),
+    status: "running",
+    itemCount: parsedItems.length,
+    inputCharacters: String(text || "").length,
+    startedAt: timestamp,
+    finishedAt: "",
+    summary: null,
+    nextAction: ""
+  };
+  const run = {
+    id: id("run"),
+    sourceId: "batch-intake",
+    status: "running",
+    trigger: "batch-intake",
+    startedAt: timestamp,
+    finishedAt: "",
+    found: 0,
+    created: 0,
+    duplicates: 0,
+    failureReason: "",
+    nextAction: "",
+    batchId: batch.id
+  };
+  state.intakeBatches.unshift(batch);
+  state.collectionRuns.unshift(run);
+  finalizeCollectionRun(run);
+
+  const queuedItems = [];
+  for (const parsed of parsedItems) {
+    const queueItem = {
+      id: id("intake"),
+      batchId: batch.id,
+      ordinal: parsed.ordinal,
+      status: "queued",
+      platform: parsed.platformHint,
+      url: parsed.url,
+        originalUrl: parsed.url,
+      canonicalUrl: "",
+      identityKey: parsed.identityKey,
+      titleCandidate: parsed.titleCandidate,
+      authorCandidate: parsed.authorCandidate,
+      rawText: parsed.contextText,
+      sourceId: "",
+      signalId: "",
+      duplicateOf: "",
+      nextAction: "正在识别链接",
+      error: "",
+      createdAt: now(),
+      processedAt: ""
+    };
+    queuedItems.push(queueItem);
+
+    try {
+      const classification = await classifySourceIntakeUrl(parsed.url, { state });
+      queueItem.platform = classification.platform || parsed.platformHint;
+      queueItem.canonicalUrl = classification.canonicalUrl || parsed.url;
+      queueItem.url = classification.canonicalUrl || parsed.url;
+
+      if (!classification.ok) {
+        queueItem.status = intakeStatusFromClassification(classification);
+        queueItem.error = classification.reason || "链接无法安全解析";
+        queueItem.nextAction = queueItem.status === "needs-browser"
+          ? "打开原始短链取得最终地址；若出现登录或人机认证，请人工接管后重新投递"
+          : "换用公开可访问的最终链接，或在浏览器中人工确认";
+        continue;
+      }
+
+      if (classification.existingRecord) {
+        queueItem.status = "duplicate";
+        queueItem.duplicateOf = classification.existingRecord.id;
+        if (classification.existingRecord.entityType === "source") queueItem.sourceId = classification.existingRecord.id;
+        if (classification.existingRecord.entityType === "signal") queueItem.signalId = classification.existingRecord.id;
+        queueItem.nextAction = "打开已有记录继续处理，不重复入库";
+        continue;
+      }
+
+      const previousQueueItem = state.intakeQueue.find((item) => (
+        item.identityKey
+        && item.identityKey === parsed.identityKey
+        && ["registered", "captured", "duplicate"].includes(item.status)
+      ));
+      if (previousQueueItem) {
+        queueItem.status = "duplicate";
+        queueItem.duplicateOf = previousQueueItem.id;
+        queueItem.sourceId = previousQueueItem.sourceId || "";
+        queueItem.signalId = previousQueueItem.signalId || "";
+        queueItem.nextAction = "这条链接已在本地队列处理过";
+        continue;
+      }
+
+      if (classification.detectedType === "xhs-profile") {
+        const sourceName = queueItem.authorCandidate
+          || (classification.profileId ? `小红书博主 ${classification.profileId.slice(-6)}` : "");
+        const intake = await importSourceIntake(state, queueItem.rawText, {
+          inputUrl: parsed.url,
+          canonicalUrl: classification.canonicalUrl,
+          name: sourceName
+        });
+        queueItem.status = "registered";
+        queueItem.sourceId = intake.source?.id || "";
+        queueItem.nextAction = "主页已登记；用可见浏览器读取目标范围，遇登录或认证时人工接管";
+        continue;
+      }
+
+      if (classification.detectedType === "xhs-note") {
+        const captured = captureBatchIntakeNote(state, run, queueItem, classification);
+        queueItem.signalId = captured.signal?.id || "";
+        queueItem.sourceId = captured.matchedSource?.id || captured.signal?.sourceId || "";
+        queueItem.status = "captured";
+        queueItem.nextAction = "已进入 Inbox；下一步补采封面与详情证据，再生成逐字稿和候选拆解";
+        continue;
+      }
+
+      const intake = await importSourceIntake(state, queueItem.rawText, {
+        inputUrl: parsed.url,
+        canonicalUrl: classification.canonicalUrl,
+        name: queueItem.authorCandidate || new URL(classification.canonicalUrl).hostname
+      });
+      queueItem.status = "registered";
+      queueItem.sourceId = intake.source?.id || "";
+      queueItem.nextAction = intake.nextAction || "公开页面已登记";
+      run.found += 1;
+    } catch (error) {
+      queueItem.status = "failed";
+      queueItem.error = String(error?.message || "处理失败").slice(0, 500);
+      queueItem.nextAction = "查看错误原因，修正分享文本或链接后重新投递";
+    } finally {
+      queueItem.processedAt = now();
+    }
+  }
+
+  state.intakeQueue = [...queuedItems, ...state.intakeQueue].slice(0, 300);
+  const summary = intakeQueueSummary(queuedItems);
+  batch.summary = summary;
+  batch.finishedAt = now();
+  batch.status = summary.failed > 0
+    ? "partial"
+    : summary.blocked > 0 || summary["needs-browser"] > 0
+      ? "needs-review"
+      : "completed";
+  batch.nextAction = batchIntakeNextAction(summary);
+
+  run.status = summary.failed > 0 || summary.blocked > 0
+    ? "blocked"
+    : summary["needs-browser"] > 0
+      ? "blocked"
+      : run.created > 0
+        ? "ok"
+        : "ok-no-new";
+  run.finishedAt = now();
+  run.nextAction = batch.nextAction;
+  run.failureReason = summary.failed > 0
+    ? `${summary.failed} 条处理失败`
+    : summary.blocked + summary["needs-browser"] > 0
+      ? `${summary.blocked + summary["needs-browser"]} 条需要人工或浏览器补采`
+      : "";
+  finalizeCollectionRun(run);
+  refreshEngagementMetrics(state);
+  refreshMorningBrief(state);
+
+  return {
+    ok: true,
+    batch,
+    run,
+    items: queuedItems,
+    summary
+  };
+}
+
 function clipText(value, length = 900) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, length);
 }
@@ -2300,8 +3183,53 @@ function driveTaskDir(driveRoot, taskId) {
   return path.join(driveRoot, "ContentFlowWorkbench", "Outbox", taskId);
 }
 
-function buildAgentTaskContext(state, topicId = "") {
+function buildAgentSignalContext(state, signal, { includeFullTranscript = false } = {}) {
+  const transcriptText = String(signal.transcriptText || "");
+  const transcriptSegments = Array.isArray(signal.transcriptSegments) ? signal.transcriptSegments : [];
+  const latestAnalysis = latestAnalysisForSignal(state, signal.id);
+  return {
+    id: signal.id,
+    title: signal.title || signal.note || "",
+    author: signal.author || "",
+    platform: signal.platform || "",
+    url: signal.url || "",
+    capturedAt: signal.capturedAt || "",
+    engagement: signal.engagement ?? null,
+    relativeMultiple: signal.relativeMultiple ?? null,
+    coverUrl: signal.coverUrl || "",
+    dataPointCandidates: Array.isArray(signal.dataPointCandidates) ? signal.dataPointCandidates.slice(0, 5) : [],
+    contentText: clipText(signal.contentText, includeFullTranscript ? 12000 : 4000),
+    contentTextTruncated: String(signal.contentText || "").length > (includeFullTranscript ? 12000 : 4000),
+    imageDescriptions: Array.isArray(signal.imageDescriptions) ? signal.imageDescriptions.slice(0, 10) : [],
+    mediaItems: Array.isArray(signal.mediaItems) ? signal.mediaItems.slice(0, 20) : [],
+    transcript: transcriptText ? {
+      evidenceState: "unverified",
+      warning: "ASR 候选稿可能包含同音字、断句和术语错误；引用前必须人工校对并保留时间戳。",
+      model: signal.transcriptModel || "",
+      capturedAt: signal.transcriptCapturedAt || "",
+      durationSeconds: Number(signal.transcriptDurationSeconds || 0),
+      characterCount: transcriptText.length,
+      segmentCount: transcriptSegments.length,
+      text: includeFullTranscript ? transcriptText : clipText(transcriptText, 2000),
+      textTruncated: !includeFullTranscript && transcriptText.length > 2000,
+      segments: includeFullTranscript ? transcriptSegments : transcriptSegments.slice(0, 20),
+      segmentsTruncated: !includeFullTranscript && transcriptSegments.length > 20,
+      omittedSegmentCount: includeFullTranscript ? 0 : Math.max(0, transcriptSegments.length - 20),
+      artifactPath: signal.transcriptArtifactPath || "",
+      mediaPath: signal.transcriptMediaPath || ""
+    } : null,
+    latestAnalysis: latestAnalysis ? {
+      id: latestAnalysis.id,
+      evidenceState: latestAnalysis.evidenceState || "unverified",
+      generatedAt: latestAnalysis.createdAt || "",
+      analysis: latestAnalysis.analysis || null
+    } : null
+  };
+}
+
+function buildAgentTaskContext(state, topicId = "", signalId = "") {
   const topic = (state.topics || []).find((item) => item.id === topicId) || null;
+  const focusSignal = (state.signals || []).find((item) => item.id === signalId) || null;
   const linkedMaterialIds = new Set(topic?.materialIds || []);
   const linkedMaterials = (state.materials || []).filter((item) => linkedMaterialIds.has(item.id)).slice(0, 12);
   const hotComments = (state.materials || []).filter((item) => item.type === "hot-comment" && !linkedMaterialIds.has(item.id)).slice(0, 8);
@@ -2319,7 +3247,10 @@ function buildAgentTaskContext(state, topicId = "") {
       citationNote: clipText(item.citationNote, 240)
     }));
 
-  const linkedSignalIds = new Set(topic?.sourceSignalIds || []);
+  const linkedSignalIds = new Set([
+    ...(topic?.sourceSignalIds || []),
+    ...(focusSignal ? [focusSignal.id] : [])
+  ]);
   const linkedSignals = (state.signals || []).filter((item) => linkedSignalIds.has(item.id)).slice(0, 8);
   const highPotentialSignals = (state.signals || [])
     .filter((item) => item.automationTier === "high-potential" && !linkedSignalIds.has(item.id))
@@ -2327,17 +3258,7 @@ function buildAgentTaskContext(state, topicId = "") {
   const selectedSignals = [...linkedSignals, ...highPotentialSignals]
     .filter((item, index, list) => list.findIndex((other) => other.id === item.id) === index)
     .slice(0, 12)
-    .map((item) => ({
-      id: item.id,
-      title: item.title || item.note || "",
-      author: item.author || "",
-      url: item.url || "",
-      engagement: item.engagement ?? null,
-      relativeMultiple: item.relativeMultiple ?? null,
-      dataPointCandidates: Array.isArray(item.dataPointCandidates) ? item.dataPointCandidates.slice(0, 5) : [],
-      contentText: clipText(item.contentText, 4000),
-      imageDescriptions: Array.isArray(item.imageDescriptions) ? item.imageDescriptions.slice(0, 10) : []
-    }));
+    .map((item) => buildAgentSignalContext(state, item, { includeFullTranscript: item.id === signalId }));
 
   const scripts = topic
     ? (state.scripts || [])
@@ -2346,29 +3267,30 @@ function buildAgentTaskContext(state, topicId = "") {
       .map((item) => ({ id: item.id, versionNote: item.versionNote, inputSummary: clipText(item.inputSummary, 400), text: clipText(item.text, 1200) }))
     : [];
 
-  const context = topic
-    ? {
-        topic: {
-          id: topic.id,
-          title: topic.title,
-          coreIdea: topic.coreIdea,
-          targetReader: topic.targetReader,
-          minimalPublishableVersion: topic.minimalPublishableVersion,
-          stage: topic.stage,
-          platforms: topic.platforms || []
-        },
-        materials: selectedMaterials,
-        signals: selectedSignals,
-        scripts
+  const context = {
+    ...(topic ? {
+      topic: {
+        id: topic.id,
+        title: topic.title,
+        coreIdea: topic.coreIdea,
+        targetReader: topic.targetReader,
+        minimalPublishableVersion: topic.minimalPublishableVersion,
+        stage: topic.stage,
+        platforms: topic.platforms || []
       }
-    : {
-        materials: selectedMaterials,
-        signals: selectedSignals,
-        scripts: []
-      };
+    } : {}),
+    ...(focusSignal ? {
+      focusSignal: buildAgentSignalContext(state, focusSignal, { includeFullTranscript: true })
+    } : {}),
+    materials: selectedMaterials,
+    signals: selectedSignals,
+    scripts: topic ? scripts : []
+  };
 
   const digest = [
     topic ? `选题：${topic.title}` : "任务未绑定选题",
+    focusSignal ? `聚焦信号：${focusSignal.title || focusSignal.note || focusSignal.id}` : "",
+    focusSignal?.transcriptText ? `逐字稿：${focusSignal.transcriptSegments?.length || 0} 段 · unverified` : "",
     `素材 ${selectedMaterials.length} 条`,
     `信号 ${selectedSignals.length} 条`,
     scripts.length ? `既有稿子版本 ${scripts.length} 个` : ""
@@ -2492,11 +3414,13 @@ async function createAgentTask(state, input = {}) {
   if (!title || !objective) throw new Error("title and objective are required");
   const topicId = String(input.topicId || "").trim();
   if (topicId && !(state.topics || []).some((topic) => topic.id === topicId)) throw new Error("topic not found");
+  const signalId = String(input.signalId || "").trim();
+  if (signalId && !(state.signals || []).some((signal) => signal.id === signalId)) throw new Error("signal not found");
   if (["outline", "script"].includes(kind) && !topicId) throw new Error("提纲和口播稿任务必须绑定选题");
   const mirrorToDrive = input.mirrorToDrive === true || input.mirrorToDrive === "true";
   if (mirrorToDrive && !state.settings.driveRoot) throw new Error("未配置 Google Drive 目录，不能镜像任务包");
 
-  const { context, digest } = buildAgentTaskContext(state, topicId);
+  const { context, digest } = buildAgentTaskContext(state, topicId, signalId);
   const timestamp = now();
   const task = {
     id: id("agent"),
@@ -2504,6 +3428,7 @@ async function createAgentTask(state, input = {}) {
     agent,
     kind,
     topicId,
+    signalId,
     objective,
     outputRequirements: clipText(input.outputRequirements, 2000),
     contextDigest: digest,
@@ -2548,9 +3473,23 @@ async function scanAgentTaskResults(state, { persist = true } = {}) {
     if (!["outbox", "running", "result-ready"].includes(task.status)) continue;
     const result = await latestAgentResult(task);
     if (!result) continue;
+    let localRunCleaned = false;
+    if (result.key === "local") {
+      if (task.localProcessPid != null) {
+        task.localProcessPid = null;
+        localRunCleaned = true;
+      }
+      if (runningAgentTaskIds.delete(task.id)) localRunCleaned = true;
+      const lockPath = agentTaskLockPath(task.id);
+      const hadLock = await fs.stat(lockPath).then((stat) => stat.isFile()).catch(() => false);
+      if (hadLock) {
+        await fs.rm(lockPath, { force: true }).catch(() => {});
+        localRunCleaned = true;
+      }
+    }
     const hash = crypto.createHash("sha256").update(result.text).digest("hex");
     const unchangedResult = task.resultHash === hash && task.resultText === result.text;
-    if (unchangedResult && task.driveStatus !== "sync-error") continue;
+    if (unchangedResult && task.driveStatus !== "sync-error" && !localRunCleaned) continue;
 
     if (result.key === "drive" && task.outboxPath) {
       await fs.writeFile(path.join(task.outboxPath, "result.md"), result.text, "utf8");
@@ -2613,6 +3552,7 @@ async function importAgentTaskResult(state, taskId) {
       whyValuable: `Agent 输出候选：${task.title}`,
       possibleUse: task.kind === "title" ? "title" : task.kind === "visual" ? "case" : "evidence",
       citationNote: "Agent 输出，发布前必须核对原始证据和来源链接",
+      evidenceState: "unverified",
       topicIds: task.topicId ? [task.topicId] : []
     }]);
     target = "materials";
@@ -2687,16 +3627,44 @@ async function agentTaskProcessIsAlive(taskId) {
 async function recoverDetachedAgentTasks(state) {
   let changed = false;
   for (const task of state.agentTasks || []) {
-    if (task.status !== "running" || runningAgentTaskIds.has(task.id)) continue;
+    if (task.status === "imported") {
+      const lockPath = agentTaskLockPath(task.id);
+      const lock = await readAgentTaskLock(task.id);
+      const lockExists = await fs.stat(lockPath).then((stat) => stat.isFile()).catch(() => false);
+      if (task.localProcessPid == null && !lockExists) continue;
+      if (task.localProcessPid != null && processPidAppearsAlive(task.localProcessPid)) continue;
+      if (lock?.pid && processPidAppearsAlive(lock.pid)) continue;
+
+      const resultText = task.outboxPath
+        ? await fs.readFile(path.join(task.outboxPath, "result.md"), "utf8").catch(() => "")
+        : "";
+      if (!resultText.trim() || !task.resultHash) continue;
+      const resultHash = crypto.createHash("sha256").update(resultText).digest("hex");
+      if (resultHash !== task.resultHash) continue;
+
+      task.localProcessPid = null;
+      task.localRunMetadataCleanedAt = now();
+      runningAgentTaskIds.delete(task.id);
+      await fs.rm(lockPath, { force: true }).catch(() => {});
+      changed = true;
+      continue;
+    }
+    if (task.status !== "running") continue;
     const lock = await readAgentTaskLock(task.id);
     if (lock?.pid && processPidAppearsAlive(lock.pid)) {
       task.localProcessPid = lock.pid;
       task.lastError = "服务重启后检测到本机 Agent 进程仍在运行，等待结果回流";
       task.updatedAt = now();
     } else {
+      const startedAt = Date.parse(task.localRunStartedAt || "");
+      const withinSpawnGrace = runningAgentTaskIds.has(task.id)
+        && Number.isFinite(startedAt)
+        && Date.now() - startedAt < 10_000;
+      if (withinSpawnGrace) continue;
+      runningAgentTaskIds.delete(task.id);
       task.status = "outbox";
       task.localProcessPid = null;
-      task.lastError = "服务重启时任务中断；请重跑或扫描结果";
+      task.lastError = "本机 Agent 进程已退出但没有生成结果；请重跑或扫描结果";
       task.updatedAt = now();
       await fs.rm(agentTaskLockPath(task.id), { force: true }).catch(() => {});
     }
@@ -3181,6 +4149,15 @@ async function handleApi(request, response, pathname) {
     return sendJson(response, 200, { ...state, runtime: runtimeState(state) }, request);
   }
 
+  if (request.method === "GET" && pathname === "/api/agent-plugin/manifest") {
+    return sendJson(response, 200, agentPluginManifest({ baseUrl: `http://127.0.0.1:${activePort}` }), request);
+  }
+
+  if (request.method === "GET" && pathname === "/api/platform-capabilities") {
+    const state = await readState();
+    return sendJson(response, 200, platformCapabilityRuntime(state), request);
+  }
+
   if (request.method === "GET" && pathname === "/api/export") {
     const state = await readState();
     response.writeHead(200, {
@@ -3240,10 +4217,132 @@ async function handleApi(request, response, pathname) {
       return sendJson(response, 200, result, request);
     }
 
+    if (pathname === "/api/xhs/guest-capture") {
+      const isPlainObject = body && typeof body === "object" && !Array.isArray(body);
+      const fields = isPlainObject ? Object.keys(body) : [];
+      if (fields.some((field) => field !== "text")) {
+        return sendJson(response, 400, {
+          ok: false,
+          error: "guest capture accepts only the text field; cookies, tokens, profiles, and capture payloads are not accepted"
+        }, request);
+      }
+      const text = isPlainObject && typeof body.text === "string" ? body.text.trim() : "";
+      if (!text) {
+        return sendJson(response, 400, {
+          ok: false,
+          error: "text is required and must contain a Xiaohongshu share link or share text"
+        }, request);
+      }
+      const captureKey = crypto.createHash("sha256").update(text).digest("hex");
+      if (runningXhsCaptureIds.has(captureKey)) {
+        return sendJson(response, 409, {
+          ok: false,
+          error: "the same Xiaohongshu capture is already running"
+        }, request);
+      }
+
+      runningXhsCaptureIds.add(captureKey);
+      const captureRunId = id("capture");
+      const startedAt = now();
+      try {
+        await enqueueStateMutation(async () => {
+          const state = await readState();
+          state.captureRuns.unshift({
+            id: captureRunId,
+            status: "running",
+            trigger: "xiaohongshu-guest-chrome",
+            startedAt,
+            updatedAt: startedAt,
+            finishedAt: "",
+            captureState: "starting",
+            reason: "已接受采集任务，正在解析分享链接。",
+            humanAction: "",
+            noteId: "",
+            captureUrl: "",
+            signalId: "",
+            created: 0,
+            transcriptStatus: "",
+            mediaCount: 0,
+            warnings: []
+          });
+          await writeState(state, { backup: false });
+        });
+
+        const captured = await captureXhsGuestNote(text, {
+          runId: captureRunId,
+          onStatus: (payload) => persistXhsCaptureProgress(captureRunId, payload)
+        });
+        const final = await enqueueStateMutation(async () => {
+          const state = await readState();
+          const run = (state.captureRuns || []).find((item) => item.id === captureRunId);
+          let persisted = null;
+          let persistenceError = "";
+          if (captured.ok) {
+            try {
+              persisted = persistXhsGuestCapture(state, captured);
+            } catch (error) {
+              persistenceError = String(error?.message || error).slice(0, 2000);
+            }
+          }
+          const finalStatus = captured.ok && persisted ? "captured" : (captured.status || "failed");
+          if (run) {
+            Object.assign(run, {
+              status: finalStatus,
+              captureState: captured.capture?.captureState || run.captureState || "",
+              noteId: captured.capture?.noteId || run.noteId || "",
+              captureUrl: normalizeUrl(captured.finalUrl || run.captureUrl || ""),
+              reason: persistenceError || captured.reason || run.reason || "",
+              humanAction: captured.humanAction || run.humanAction || "",
+              signalId: persisted?.signal?.id || "",
+              created: persisted?.created ? 1 : 0,
+              transcriptStatus: persisted?.transcriptStatus || "",
+              mediaCount: persisted?.mediaCount || 0,
+              warnings: Array.isArray(captured.warnings) ? captured.warnings.slice(0, 20) : [],
+              finishedAt: now(),
+              updatedAt: now()
+            });
+          }
+          await writeState(state, { backup: false });
+          return {
+            ok: Boolean(captured.ok && persisted),
+            status: finalStatus,
+            runId: captureRunId,
+            finalUrl: captured.finalUrl || "",
+            reason: persistenceError || captured.reason || "",
+            humanAction: captured.humanAction || "",
+            warnings: Array.isArray(captured.warnings) ? captured.warnings : [],
+            signalId: persisted?.signal?.id || "",
+            created: Boolean(persisted?.created),
+            transcriptStatus: persisted?.transcriptStatus || "",
+            mediaCount: persisted?.mediaCount || 0,
+            captureRun: publicCaptureRun(run || {
+              id: captureRunId,
+              status: finalStatus,
+              startedAt,
+              finishedAt: now()
+            })
+          };
+        });
+        return sendJson(response, 200, final, request);
+      } finally {
+        runningXhsCaptureIds.delete(captureKey);
+      }
+    }
+
     if (pathname === "/api/source-intake") {
       const result = await enqueueStateMutation(async () => {
         const state = await readState();
         const intake = await importSourceIntake(state, body.text);
+        await writeState(state);
+        return intake;
+      });
+      return sendJson(response, 200, result, request);
+    }
+
+    if (pathname === "/api/source-intake/batch") {
+      const result = await enqueueStateMutation(async () => {
+        const state = await readState();
+        const intake = await runBatchSourceIntake(state, body.text);
         await writeState(state);
         return intake;
       });
@@ -3280,11 +4379,19 @@ async function handleApi(request, response, pathname) {
       if (!allowed.includes(type)) return sendJson(response, 400, { error: "unknown record type" }, request);
       const result = await enqueueStateMutation(async () => {
         const state = await readState();
-        if (type === "publications") validatePublicationRecord(state, body.record || {});
-        const totals = importRecords(state, type, [body.record || {}]);
+        const sourceRecord = body.record || {};
+        const requestedId = String(sourceRecord.id || "");
+        if (type === "publications") validatePublicationRecord(state, sourceRecord);
+        const previousIds = new Set((state[type] || []).map((item) => item.id).filter(Boolean));
+        const totals = importRecords(state, type, [sourceRecord]);
+        const identity = new Set(identityKeys(type, sourceRecord).filter(Boolean));
+        const record = (state[type] || []).find((item) =>
+          (requestedId && item.id === requestedId) ||
+          identityKeys(type, item).some((key) => identity.has(key))
+        ) || (state[type] || []).find((item) => !previousIds.has(item.id)) || null;
         refreshEngagementMetrics(state);
         await writeState(state);
-        return { ok: true, ...totals };
+        return { ok: true, ...totals, record };
       });
       return sendJson(response, 200, result, request);
     }
@@ -3442,6 +4549,47 @@ async function handleApi(request, response, pathname) {
       return sendJson(response, 200, result, request);
     }
 
+    if (pathname === "/api/signals/analysis") {
+      const signalId = String(body.signalId || "").trim();
+      if (!signalId) return sendJson(response, 400, { ok: false, error: "signalId is required" }, request);
+      const result = await enqueueStateMutation(async () => {
+        const state = await readState();
+        const candidate = createTranscriptAnalysis({ state, signalId });
+        const latest = latestAnalysisForSignal(state, signalId);
+        if (body.force !== true && latest?.input?.transcriptHash === candidate.input.transcriptHash) {
+          return { ok: true, reused: true, analysis: latest };
+        }
+        state.analysisRuns.unshift(candidate);
+        await writeState(state);
+        return { ok: true, reused: false, analysis: candidate };
+      });
+      return sendJson(response, 200, result, request);
+    }
+
+    if (pathname === "/api/knowledge/export") {
+      const result = await enqueueStateMutation(async () => {
+        const state = await readState();
+        const requestedDriveRoot = String(body.driveRoot || state.settings.driveRoot || "").trim();
+        const driveRoot = await validateDriveRoot(requestedDriveRoot);
+        const exported = await exportKnowledgeToDrive({ state, driveRoot });
+        const record = {
+          id: exported.exportId,
+          status: "completed",
+          evidenceState: exported.manifest.evidenceState,
+          targetRoot: exported.targetRoot,
+          analysisCount: exported.analysisCount,
+          transcriptCount: exported.transcriptCount,
+          fileCount: exported.fileCount,
+          generatedAt: exported.generatedAt,
+          createdAt: now()
+        };
+        state.knowledgeExports.unshift(record);
+        await writeState(state);
+        return { ok: true, export: record };
+      });
+      return sendJson(response, 200, result, request);
+    }
+
     if (pathname === "/api/browser-capture") {
       const result = await enqueueStateMutation(async () => {
         const state = await readState();
@@ -3546,11 +4694,18 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Personal Content Workbench: http://127.0.0.1:${port}`);
+  activePort = server.address().port;
+  const locator = publishRuntimeLocator({ port: activePort });
+  console.log(`Personal Content Workbench: http://127.0.0.1:${activePort}`);
+  console.log(`Runtime locator: ${locator.path}`);
   console.log(`Static UI: ${distDir}`);
   console.log(`Automation scheduler: ${["false", "0", "off"].includes(String(process.env.AUTOMATION_ENABLED || "").toLowerCase()) ? "disabled" : "enabled"}, tick ${automationTickMs}ms`);
   console.log(`Drop folder scanner: ${dropDir}, scan ${dropScanMs}ms`);
 });
+
+process.once("exit", clearRuntimeLocator);
+process.once("SIGINT", () => process.exit(130));
+process.once("SIGTERM", () => process.exit(143));
 
 const automationTimer = setInterval(() => {
   runAutomationTickQueued(false).catch((error) => {

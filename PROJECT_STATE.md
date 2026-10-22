@@ -1,17 +1,19 @@
 # PROJECT_STATE
 
-Updated: 2026-10-22
+Updated: 2026-10-22 09:30
 Current phase: release hardening
 
 ## 一句话现状
 
-已完成 Park 原型分析、North Star 路线图和本地工作台 MVP。当前成品由 React 19 + TypeScript + Vite 构建，`scripts/server.mjs` 在 5177 单端口同时托管 `app/dist` 与 `/api/**`；总览、信息流、工作流、系统分别使用 `/`、`/flow`、`/workflow`、`/system` 路径并支持刷新、深链和前进后退。服务端包含轻量调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面解析、多层身份去重、每日晨报、Agent 任务包与结果回流；采集指挥中心、统一结果信封、四平台能力矩阵、声明式能力边界、分层证据包和六段晨间流水线均已接入。主数据继续只保存在本机，真实账号、笔记、评论、媒体、证据、逐字稿和任务内容不进入 Git。
+已完成 Park 原型分析、North Star 路线图和本地工作台 MVP。当前成品由 React 19 + TypeScript + Vite 构建，`scripts/server.mjs` 在 5177 单端口同时托管 `app/dist` 与 `/api/**`；总览、信息流、工作流、系统分别使用 `/`、`/flow`、`/workflow`、`/system` 路径并支持刷新、深链和前进后退。服务端包含轻量调度、失败退避、并发保护、本地投递箱、快速粘贴、公开页面解析、多层身份去重、每日晨报、Agent 任务包与结果回流；采集指挥中心、统一结果信封、四平台能力矩阵、声明式能力边界、分层证据包、全文逐字稿、候选流量分析、Drive 知识导出、本地 Agent 插件和六段晨间流水线均已接入。主数据继续只保存在本机，真实账号、笔记、评论、媒体、证据、逐字稿和任务内容不进入 Git。
 
 本轮参考 Postiz、Mixpost 和 LangChain social-media-agent 后，工作台从“表单优先”转向“行动优先”：总览提供每日优先队列和 3 条作品目标进度，信息流提供节奏条，工作流提供阶段漏斗，发布台账提供平台队列；hash 返回 / 前进路由与系统页移动端横向溢出已修复。总览已可一键运行晨间流水线，信息流已展示四平台安全能力矩阵。工作流进一步收敛为“当前选题主卡 → 阶段漏斗 → 制作与审核 / 发布 / 复盘三个折叠区 → 选题库与全局台账折叠区”：制作和发布默认收起，复盘默认展开，复盘内“稿件回看”再用二级折叠隐藏两版正文；阶段跳转会自动递归展开父级折叠区。桌面 1440×1000 页面高度从 5,248px 降到 3,202px，390×844 手机从 8,191px 降到 4,496px，375×812 小手机从 8,191px 降到 4,586px。第一条真实信号已完成到两版口播稿、三平台本地演练台账、复盘和摩擦记录的完整本地闭环；这轮未进行真实公开平台发布。
 
-2026-10-21 当前主数据有 7 个真实小红书对标账号、12 条信号和 4 条真实游客态详情证据包。用户提供的 4 条可读详情均完成正文、封面、媒体清单、raw snapshot、证据包和哈希校验，并经逐条显式本地 ASR 得到 1,995 / 1,456 / 1,665 / 894 字候选逐字稿，共 387 段，全部保持 `unverified`。4 个对应作者主页均完成游客态 blocked 快照：首屏各 12 条可见但全部缺少 noteId，Inbox 新增 0。游客态搜索字段和搜索结果 URL 也已验证为登录限制，不能反查 blocked 标题。平台能力矩阵在当前 7 个小红书源上校验通过；4 条逐字稿证据重建后通过总览页运行晨间流水线 `morning-pipeline-2026-10-21-01afef91`，HTTP 200、`ok: true` 和完整六段状态，其中 Inbox 为待处理超限的 `attention`，不是运行失败。
+2026-10-21 当前主数据有 7 个真实小红书对标账号、12 条信号和 4 条真实游客态详情证据包。用户提供的 4 条可读详情均完成正文、封面、媒体清单、raw snapshot、证据包和哈希校验，并经逐条显式本地 ASR 得到 1,995 / 1,456 / 1,665 / 894 字候选逐字稿，共 387 段，全部保持 `unverified`。4 个对应作者主页均完成游客态 blocked 快照：首屏各 12 条可见但全部缺少 noteId，Inbox 新增 0。游客态搜索字段和搜索结果 URL 也已验证为登录限制，不能反查 blocked 标题。平台能力矩阵在当前 7 个小红书源上校验通过；4 条逐字稿证据重建后通过总览页运行晨间流水线 `morning-pipeline-2026-10-21-fcea03ba`，HTTP 200、`ok: true` 和完整六段状态，其中 Inbox 为待处理超限的 `attention`，不是运行失败。
 
-2026-10-22 的发布加固已完成：晨间流水线先持久化 `running`，再逐段更新；六段聚合优先级固定为 `failed > blocked > pending > attention > running > skipped > ok`。后台自动调度只执行 `public-rss`、`public-page`，`manual`、`browser-assisted` 只进入人工队列；复盘保存改为事务，设置更新只允许 `inboxTime`、`inboxDailyLimit`。
+2026-10-22 的发布加固已完成：晨间流水线先持久化 `running`，再逐段更新；六段聚合优先级固定为 `failed > blocked > pending > attention > running > skipped > ok`。后台自动调度只执行 `public-rss`、`public-page`，`manual`、`browser-assisted` 只进入人工队列；复盘保存改为事务，设置更新只允许 `inboxTime`、`inboxDailyLimit`。同日新增九个固定方法的本地 Agent 插件、全文 / 时间轴 / 候选分析阅读器、绑定完整逐字稿的 Agent 任务包和显式 Drive 知识导出；隔离浏览器验收确认四张真实封面、时间戳引文、完整 Agent 上下文和全部导出哈希。快速粘贴现已按链接意图进入批次入口，信息流常驻显示“最近链接入库”；正式真实数据验收覆盖六段流水线、平台矩阵、逐字稿和批次重复回显。
+
+2026-10-22 09:20 新增真实逐字稿隔离 E2E：用 Windows 中文 SAPI 和 ffmpeg 生成临时 MP4，预置到临时逐字稿目录后用不可访问的 CDN 地址作诱饵，实际执行后台 ffmpeg + faster-whisper；同一 run 原位完成并验证全文、时间轴、媒体 / JSON 落盘、证据包 SHA-256 匹配，以及候选分析的 `unverified` 和输入哈希复用。测试全程不读取或修改真实主数据，命令为 `npm run test:transcript:e2e`。
 
 ## 已接受事实
 
@@ -21,7 +23,9 @@ Current phase: release hardening
 - 成品前端已收敛为 React 19 + TypeScript + Vite 单端口运行：`scripts/server.mjs` 在 5177 同时托管 `app/dist` 与 `/api/**`，`/`、`/flow`、`/workflow`、`/system` 支持刷新、深链和浏览器前进后退；构建先清空 `app/dist`，再回填 capture bridge，不再累积历史 hash 目录 — `web/src/**`、`scripts/build-ui.mjs`、`scripts/server.mjs`、`docs/FRONTEND_ARCHITECTURE.md`
 - 晨间流水线状态一致性和写入边界已修复：运行记录先落 `running`，失败、阻塞、待处理、待人工、运行中、跳过、完成按固定优先级聚合；`manual` 与 `browser-assisted` 源不会被后台调度器自动执行，`/api/update type=settings` 严格限制为 `inboxTime`、`inboxDailyLimit` — `scripts/morning-pipeline.mjs`、`scripts/server.mjs`、`scripts/backend-pipeline-regression.mjs`
 - 单一源码与多 Agent 协作已固化：本地 `main` 工作区和 GitHub `origin/main` 是唯一最终源码；临时分支 / worktree 必须合入，`npm run verify:source` 会阻断脏 worktree、stash、冲突标记、未合并分支及本地 / 远端 SHA 分叉 — `docs/AGENT_COORDINATION.md`、`scripts/verify-source-of-truth.mjs`
-- 复盘保存已改为事务：复盘记录与选题推进到 `reviewed` 同成同败，写入失败时不留下半条记录；专项后端口径回归和 32/32 主链路回归均通过 — `scripts/server.mjs`、`scripts/backend-pipeline-regression.mjs`
+- 复盘保存已改为事务：复盘记录与选题推进到 `reviewed` 同成同败，写入失败时不留下半条记录；专项后端口径回归和 41/41 主链路回归均通过 — `scripts/server.mjs`、`scripts/backend-pipeline-regression.mjs`
+- 统一验收入口已实现：`npm run verify:workbench` 顺序执行 11 步，成功只打印逐项 `PASS`，失败才展开日志；本轮 41 项主链路、后端流水线、17 项信源登记、7 项批量采集、5 项插件协议、TypeScript、diff 与 UI 构建全部通过 — `scripts/verify-workbench.mjs`、`package.json`
+- 工作流首次操作路径已收敛：开选题直接选中新选题并进入 `/workflow`，证据包生成后自动打开核对区，当前选题主卡可直接编辑标题 / 核心观点 / 目标读者 / 最小可发布版本；`/api/record` 对无身份键的新记录返回导入后的对象。隔离 E2E 覆盖路由、`localStorage` 选题持久化、字段 trim、自动核对和 390px 无横向溢出 — `scripts/workflow-ux-regression.mjs`、`scripts/server.mjs`、`web/src/features/flow.tsx`、`web/src/features/workflow.tsx`
 - 用户提供的 4 条小红书可读详情均完成真实游客态采集：每条均有正文、封面、媒体清单、raw snapshot 和证据包，初始页面逐字稿均标记为 missing，访问过程中未遇到人机验证；公开文档只保留匿名化后的方法与验收结论 — `docs/xhs-collection-research.md`、`docs/platform-capabilities.md`
 - 4 条真实信号完成本地 ASR 验收：每次显式选择一个完整视频、拒绝分段媒体，经 ffmpeg 与 faster-whisper small int8 CPU 生成 `captured` 候选稿；4 个证据包均含正文候选、时间轴和 SHA-256 清单，哈希重算匹配，证据状态保持 `unverified` — `scripts/transcribe-signal.mjs`、`scripts/transcribe_audio.py`、`scripts/evidence-package.mjs`
 - Chrome 155 的 Private Network Access 拦截已通过本地 bridge 解决：小红书详情书签向受约束的 `app/capture-bridge.html` 发送 `postMessage`，bridge 在本地源内调用工作台 API；未关闭浏览器安全开关，未使用用户登录态 — `app/capture-bridge.html`、`app/app.js`、`scripts/server.mjs`
@@ -107,6 +111,13 @@ Current phase: release hardening
 - 2026-10-20 — 界面收回扁平 tab 工作台 — `decisions.md`
 - 2026-10-20 — 主导航采用四个大类 tab — `decisions.md`
 - 2026-10-20 — 工作台体验采用行动优先和阶段漏斗模式 — `decisions.md`
+- 2026-10-22 — 本地 Agent 插件只暴露声明式 loopback 内容能力（D-016） — `docs/DECISIONS.md`
+- 2026-10-22 — 全文逐字稿与时间轴是一等证据，Agent 必须拿到完整上下文（D-017） — `docs/DECISIONS.md`
+- 2026-10-22 — 候选分析默认 `unverified`，Drive 使用显式本地同步导出（D-018） — `docs/DECISIONS.md`
+- 2026-10-22 — 系统页只读展示知识包历史，导出完成不等于分析已验证（D-019） — `docs/DECISIONS.md`
+- 2026-10-22 — 一键验收保留高信号输出，单项命令继续支持定位（D-020） — `docs/DECISIONS.md`
+- 2026-10-22 — 链接输入按对象意图分流，批次结果必须持久回显（D-021） — `docs/DECISIONS.md`
+- 2026-10-22 — 选题创建直入工作流，证据生成直入核对，当前选题主卡可编辑（D-023） — `docs/DECISIONS.md`
 
 ## 已实现
 
@@ -155,33 +166,48 @@ Current phase: release hardening
 - 工作流结构精简与定位 — `app/app.js`、`app/styles.css`、`scripts/chain-regression.mjs`、`work/verify-workflow-optimization.cjs` — 当前选题主卡优先展示闭环状态、下一步、稿件 / 平台 / 复盘计数与关键缺口；制作、发布、选题库与全局台账默认收起，复盘保持展开，复盘正文与历史版本再二级收起；`openWorkflowPanel()` 会递归展开父级折叠区，`summary` 保持至少 44px 触控高度；31 项链路回归通过，Playwright 在 1440×1000、390×844、375×812 三视口验证无控制台 / 页面异常、无横向溢出，切换选题持久化且自动展开对应阶段，四类表单 API 拦截后数据计数保持 2 稿件 / 3 发布 / 1 复盘 / 5 摩擦；暗色实测正文 `#f5f5f7`、次级文字 `#a5a5aa`、面板 `#1c1c1e`，对比度断言通过
 - React 成品 UI 与单端口深链 — `web/src/**`、`scripts/build-ui.mjs`、`scripts/server.mjs`、`app/dist/**` — 总览、信息流、工作流、系统四域使用原生路径；SPA 回退只承接页面路由，缺失静态资源保持 404，越界路径保持 403；构建采用 `emptyOutDir: true` 并由脚本回填 `app/capture-bridge.html`
 - 流水线与服务边界加固 — `scripts/morning-pipeline.mjs`、`scripts/server.mjs`、`scripts/chain-regression.mjs`、`scripts/backend-pipeline-regression.mjs` — 运行中状态先落盘、聚合优先级固定、自动调度排除人工源、settings 字段白名单和复盘事务均已纳入回归；新增独立后端流水线回归脚本
-- 前端设计与执行契约 — `AGENTS.md`、`docs/DESIGN.md`、`docs/FRONTEND_ARCHITECTURE.md`、`docs/UI_RUNTIME.md`、`docs/design-tokens.css` — 明确 Agent 必读顺序、组件准入、token 单一来源、四域路径、单端口构建与 32 项完成定义
+- 前端设计与执行契约 — `AGENTS.md`、`docs/DESIGN.md`、`docs/FRONTEND_ARCHITECTURE.md`、`docs/UI_RUNTIME.md`、`docs/design-tokens.css` — 明确 Agent 必读顺序、组件准入、token 单一来源、四域路径、单端口构建、41 项主链路与统一验收命令
+- 全文逐字稿与候选流量分析 — `scripts/analysis-workflow.mjs`、`scripts/server.mjs`、`web/src/features/flow.tsx`、`web/src/lib/types.ts` — 逐字稿阅读器提供全文 / 时间轴 / 分析、复制和 TXT / JSON 导出；分析输出钩子、结构、节奏、留存机制、情绪回报、作者基线和时间戳引文，按输入哈希复用并始终保持 `unverified`
+- 真实逐字稿隔离 E2E — `scripts/transcript-e2e-regression.mjs`、`package.json` — 临时中文 SAPI 语音与 ffmpeg MP4 预置后，实际跑通后台 ffmpeg + faster-whisper、同一 run 原位完成、全文 / 时间轴、证据包 SHA-256 和候选分析哈希复用；不访问真实主数据
+- 本地 Agent 插件协议 — `plugin/content-flow-workbench/`、`scripts/agent-plugin-contract.mjs`、`scripts/plugin-regression.mjs`、`docs/plugin.md` — 九个固定方法覆盖 manifest / 状态 / 平台能力 / 信源登记 / 逐字稿 / 分析 / Agent 任务 / 知识导出 / 晨间流水线；仅允许 loopback、manifest 路由白名单和无重定向请求
+- Drive 知识导出 — `scripts/knowledge-export.mjs`、`scripts/server.mjs`、`web/src/features/system.tsx`、`docs/agent-bridge.md` — 显式写入 manifest、Markdown / JSON、README 和 SHA-256，不包含 Cookie、登录态、capture token 或浏览器 profile；mock Drive 导出文件和清单哈希全部匹配
+- 工作流首次操作路径 — `web/src/features/flow.tsx`、`web/src/features/workflow.tsx`、`scripts/server.mjs`、`scripts/workflow-ux-regression.mjs` — 开选题直接进入新选题工作流，当前选题主卡编辑关键字段，证据生成后自动打开核对区；无身份键新记录通过 `/api/record` 快照差异稳定返回
 
 ## 已验收
 
-- 业务链路 — `npm run test:chain` — 32/32 通过
-- 后端流水线 — `node scripts/backend-pipeline-regression.mjs` — 通过
+- 统一验收 — `npm run verify:workbench` — 11/11 步通过
+- 业务链路 — `npm run test:chain` — 41/41 通过
+- 真实逐字稿 E2E — `npm run test:transcript:e2e` — 4/4 通过；覆盖临时 SAPI / ffmpeg 媒体、真实 faster-whisper、异步 run 原位终态、全文与时间轴、证据包 SHA-256 和候选分析哈希复用
+- 工作流 UX E2E — `npm run test:workflow:e2e` — 6/6 通过；覆盖新选题路由与 `localStorage` 持久化、主卡字段 trim、无身份键记录返回、证据核对自动打开和 390px 无横向溢出
+- 后端流水线 — `npm run test:backend` — 通过
+- 插件协议 — `npm run test:plugin` — 5/5 通过
+- 信源登记 — `npm run test:sources` — 17/17 通过
+- 批量采集 — `npm run test:batch` — 7/7 通过
 - 前端工程 — TypeScript 检查、`node --check scripts/build-ui.mjs`、`node --check scripts/server.mjs`、相关 `.mjs` 语法检查与 `npm run build:ui` — 通过
-- 真实数据浏览器验收 — 6 个视口 × 总览 / 信息流 / 工作流 / 系统，无控制台错误、无横向溢出和文字遮挡 — 通过
+- 隔离数据可见浏览器验收 — `work/ui-acceptance-final-20261022-052739/report/acceptance-result.json` — `ok: true`，覆盖晨间流水线、四平台能力矩阵、4 张真实封面、逐字稿全文 / 时间轴 / 分析、Agent 任务和 mock Drive 导出；控制台、页面与网络错误均为 0，1440×1000 与 390×844 无横向溢出
 - 异常态浏览器验收 — 空数据、最小数据、API 500 三场景 × 四工作域 — 通过
 - 单端口 HTTP 边界 — 四域深链与 `/api/state`、缺失 `/assets/**` 404、越界路径 403 — 通过
 - 状态与导航 — 中文状态映射、受阻摘要、浏览器前进后退、主题三态与移动端检查 — 通过
+- 正式真实数据浏览器验收 — `work/ui-build-acceptance-20261022-0755/acceptance-result.json` — `ok: true`；真实运行 `morning-pipeline-2026-10-21-b0cba11a`，四平台矩阵为 4×7，10 张 blocked 封面加载成功，逐字稿为 894 字 / 77 段 / 18 条时间戳引文，Agent 状态为 `imported`；控制台、页面、网络错误均为 0，1440 / 390 无横向溢出
+- 批量链接重复入口验收 — `work/ui-batch-acceptance-20261022-0800/acceptance-result.json` — `ok: true`；批次 `intake-batch-2026-10-21-469846f9` 返回 `total 1 / duplicate 1 / captured 0 / registered 0`，1440 / 390 / 375 均持久显示“最近链接入库”和队列 `duplicate`
+- 原生 Computer Use — 2026-10-22 07:22 再次初始化 `@oai/sky`，native pipe 仍不可用（`系统找不到指定的文件`）— 未宣称通过；同机浏览器交互使用 headful Playwright 真实驱动 Chrome，不需要用户登录或人机认证
+- 受限快照清洗 — `npm run sanitize:snapshots -- --dry-run` — 检查 5 个快照、58 条可见项，拟变更 0，确认现有 blocked 快照已符合字段白名单
+- 本轮运行证据 — 流水线 `morning-pipeline-2026-10-21-fcea03ba`；分析 `analysis-2026-10-21-a7c7614c`；Agent 任务 `agent-2026-10-21-cb24e4b0`；知识导出 `knowledge-2026-10-21-53b209d2`
 
 ## 未决问题
 
-- P1 — 直接生产后新选题仍带占位值，用户需要回找折叠编辑表单 — 实现 — 不阻塞闭环但影响首次手感 — 生产台直接暴露标题 / 核心观点 / 目标读者缺口
-- P1 — 证据包生成后核对区仍折叠，页面重渲染会重置展开状态 — 实现 — 不阻塞核对但增加寻找成本 — 生成成功后自动展开并定位
 - P1 — 本地演练没有独立 publication status，只能用 `published` 加原因说明 — 实现 — 已有明确文案兜底但语义易混淆 — 增加 `rehearsal` 状态并区分真实发布
 - P1 — 当前 7 个本地对标源中，4 个新增源为 blocked、1 个既有源为 missing、2 个源为 unknown，搜索摘要候选尚未经用户确认 — 用户 — 不阻塞本地信号分流和详情证据复核 — 用户确认候选优先级；需要补证据时提供具体笔记的 App 分享链接
+- P1 — 用户最新提供的两条详情链接均被游客态 `300012 IP 风险` 拦截，本轮未生成标题、封面、正文或逐字稿 — 用户 / 平台边界 — 不阻塞已有 4 条逐字稿和分析 — 用户切换可靠网络或完成平台安全验证后重新打开详情，再继续补证据；工作台不换代理、不伪造设备、不绕验证
 - P0 — 40 天内优先讲清楚的三个主题未确认 — 用户 — 阻塞选题池初始化 — 用户给出三个主题
 - P0 — “连续出摊”的定义未确认 — 用户 — 阻塞今日页指标 — 用户定义计数规则
 - P2 — Inbox 早上处理的具体时钟未确认 — 用户 — 可先用 09:00 默认值 — 用户确认或修改
 - P1 — X 视频发布或跳过标准未确认 — 用户 — 阻塞可选平台决策 — 用户给出边界
 - P1 — 公众号文稿是视频发布后整理还是同步准备未确认 — 用户 — 阻塞生产排期 — 用户选择节奏
 - P1 — 4 个新增作者主页游客态均缺 noteId，主页列表只能保存 blocked 快照，游客态搜索也被“登录后查看搜索结果”拦截，无法批量生成可打开详情链接 — 用户 / 平台边界 — 不阻塞已有 12 条信号分流和 4 条详情证据复核 — 用户对感兴趣的笔记提供 App 分享链接，再用详情书签补正文、媒体和逐字稿状态
-- P1 — 4 条 ASR 候选稿尚未人工校对 — 用户 — 不阻塞证据留存和页面展示 — 用户逐条校对同音字 / 标点 / 术语，完成前证据状态保持 `unverified`
-- P1 — 真实 Google Drive 同步目录尚未配置 — 用户 — 不阻塞本地 bridge 使用 — 用户在桥接页填写桌面同步目录
-- P1 — Codex / Claude 真实选题任务尚未运行，Grok / Muse 手动回流尚未验证 — 用户 — 不阻塞代码交付 — 用户各跑一次真实任务并记录手感
+- P1 — 4 条 ASR 候选稿尚未人工校对；候选分析只提供机制假设，不能证明平台流量因果 — 用户 — 不阻塞证据留存和页面展示 — 用户逐条校对同音字 / 标点 / 术语，并把分析结论回原文核对
+- P1 — 真实 Google Drive 同步目录尚未配置，当前只有 mock Drive 导出验收 — 用户 — 不阻塞本地 bridge 使用 — 用户在系统页填写桌面同步目录后显式导出一次
+- P1 — 插件协议已通过隔离回归，但 gkbot / Muse 真实宿主尚未接入；Codex / Claude 真实选题任务与 Grok / Muse 手动回流也尚未验证 — 用户 — 不阻塞代码交付 — 每个拟接入宿主至少跑一次真实任务并记录兼容问题
 - P2 — Cursor 的标准打开方式尚未确认 — 用户 — 可先复制任务目录手动打开 — 用户确认常用入口后再评估增强
 - P2 — Grok / Muse / Cursor 人工保存 `result.md` 时仍可能被写成半成品 — 实现 — 本机 Codex / Claude 已用 pending + 替换缓解 — 后续增加显式完成标记
 - P2 — 浏览器采集 token 在服务重启或 12 小时后失效，需要刷新页面重新复制书签 — 实现 — 可接受第一阶段手动操作 — 后续做按需刷新
@@ -193,13 +219,14 @@ Current phase: release hardening
 ## 下一步
 
 1. 连续三个真实工作日从总览行动队列和“运行流水线”开始工作 — 验收标准：一键后能看清投递箱、采集、回流、晨报、Inbox 和生产块状态，不需要手工翻找入口也能判断下一步动作，重复卡点记录在复盘区近 3 天摩擦摘要中
-2. 在账号页刷新采集指挥中心，确认 4 个新增作者的 blocked 状态、可见数量、raw snapshot 和下一步动作 — 验收标准：用户能看出继续滚动不能解决 noteId 缺失
+2. 在账号页刷新采集指挥中心，确认 4 个新增作者的 blocked 状态、可见数量、raw snapshot 和下一步动作 — 验收标准：用户能看出继续滚动不能解决 noteId 缺失；详情直达若返回 `300012`，由用户切换可靠网络或完成平台安全验证后重试
 3. 人工校对 4 条已生成逐字稿 — 验收标准：同音字、标点和术语完成人工修正，证据核对状态按结论更新；新笔记仍走 App 分享链接 + 详情书签 + 显式 ASR
 4. 将已复盘的高敏感选题推进为真实口播视频并人工发布 — 验收标准：录制 / 剪辑完成，至少一个主平台真实链接回填，公开数据只在平台可见后记录
 5. 用户用一条真实信号和一条真实热评各投一个文件到 `drops/` — 验证本地投递箱日常手感
 6. 用户打开 `http://127.0.0.1:5177` 的 Inbox — 分流第一批信号，至少挑 2 条拆解、2 条观察
 7. 用户给出三个优先主题 — 每个主题有一句话核心观点
 8. 配置真实 Google Drive 同步目录，并用一个真实选题跑一次 Codex 或 Claude 任务 — 验证任务包、运行、扫描和导入闭环
+9. 让 gkbot 与 Muse 各加载一次本地插件，调用 `getManifest`、`getState`、`createAgentTask` — 验收标准：宿主不需要手拼工作台 URL，完整逐字稿和时间轴能进入任务上下文
 
 ## 恢复上下文
 
@@ -222,14 +249,25 @@ Current phase: release hardening
 - 对标博主候选：`docs/benchmark-blogger-candidates.md`
 - UI 设计原则：`docs/workbench-ui-principles.md`
 - Agent 桥接：`docs/agent-bridge.md`
+- 本地 Agent 插件：`docs/plugin.md`
 - 待办清单：`TODO.md`
 - 导入模板：`data/import-template.json`
 - 决策文件：`decisions.md`
-- 验证命令：`npm run build:ui`、`npm run test:chain`、`node scripts/backend-pipeline-regression.mjs`、`node --check scripts/build-ui.mjs`、`node --check scripts/server.mjs`
+- 验证命令：`npm run verify:workbench`；需要单项定位时使用 `npm run test:chain`、`npm run test:backend`、`npm run test:sources`、`npm run test:batch`、`npm run test:plugin`、`npm run test:transcript:e2e`、`npm run check:types` 或 `npm run build:ui`
 - 当前运行态：5177 服务以 `AUTOMATION_ENABLED=false` 运行，后台采集暂停，真实主数据未被本轮验收改写
-- 已知坑：中文文本必须用 Node UTF-8 或显式 UTF-8 安全方式读取；Windows OCR 需要通过 `powershell.exe -File ...batch-ocr.ps1` 运行；新克隆没有真实主数据，需要从私人备份恢复或重新导入；真实备份不进入 Git
+- 已知坑：中文文本必须用 Node UTF-8 或显式 UTF-8 安全方式读取；不得用 bash 执行含 JavaScript 模板字符串的读取命令，错误 shell 会生成垃圾文件；Windows OCR 需要通过 `powershell.exe -File ...batch-ocr.ps1` 运行；原生 Computer Use native pipe 当前不可用，浏览器验收使用 headful Playwright；新克隆没有真实主数据，需要从私人备份恢复或重新导入；真实备份不进入 Git
 
 ## 最近更新
+
+- 2026-10-22 09:30 — 收敛开选题与证据核对路径 — 信息流“开选题”直接选中新选题并进入 `/workflow`，证据包生成后自动打开核对区，当前选题主卡可直接编辑标题 / 核心观点 / 目标读者 / 最小可发布版本；`/api/record` 修复无身份键新记录的返回；新增隔离 `npm run test:workflow:e2e` 6/6，通过后 `npm run verify:workbench` 11/11；真实逐字稿 E2E 此前 4/4，未因本轮 UX-only 改动重跑
+
+- 2026-10-22 09:20 — 跑通真实逐字稿隔离 E2E — 临时 SAPI 中文语音和 ffmpeg MP4 经后台 ffmpeg + faster-whisper 生成 `captured` 全文与时间轴，同一 run 原位完成；证据包 SHA-256 匹配，候选分析保持 `unverified` 并按逐字稿哈希复用；`npm run test:transcript:e2e` 4/4 通过，随后 `npm run verify:workbench` 11/11 通过，真实主数据未改动
+
+- 2026-10-22 07:22 — 完成平台矩阵、六段流水线与批次链接的正式浏览器验收 — 真实数据验收 `work/ui-build-acceptance-20261022-0755/acceptance-result.json` 与重复批次验收 `work/ui-batch-acceptance-20261022-0800/acceptance-result.json` 均为 `ok: true`；新增 D-021，确认快速粘贴链接分流和“最近链接入库”持久回显；两条最新详情链接直访触发 `300012 IP 风险`，已记录为用户侧网络 / 平台验证边界，未绕过
+
+- 2026-10-22 07:03 — 收敛验证入口并完成发布加固 — 新增 `npm run verify:workbench`，顺序覆盖语法、41 项主链路、后端流水线、17 项信源、7 项批量采集、5 项插件、TypeScript、diff 和 UI 构建，11/11 通过；清理错误 shell 产生的零字节垃圾；最新可见浏览器验收覆盖总览、四平台能力矩阵、六段流水线、真实封面、逐字稿时间轴与候选分析
+
+- 2026-10-22 — 完成逐字稿分析、本地 Agent 插件与 Drive 知识导出闭环 — 新增全文 / 时间轴 / 分析阅读器、绑定完整证据上下文的 Agent 任务包、九个固定插件方法和显式知识导出；`npm run test:chain` 37/37、插件回归 5/5、信源登记 17/17、后端流水线回归均通过；隔离可见浏览器验收 `work/ui-acceptance-final-20261022-052739/report/acceptance-result.json` 为 `ok: true`，4 张真实封面加载成功，时间戳引文为 `00:00.000 - 00:12.920`，894 字 / 77 段逐字稿完整进入 89,646 字节任务包，3 个知识文件哈希全部匹配；真实 Google Drive 与 gkbot / Muse 宿主接入仍未验收
 
 - 2026-10-22 — 固化单一源码与多 Agent 合并门槛 — `D:\personal-content-workbench` 的 `main` 与 GitHub `main` 成为唯一最终源码；新增分支 / worktree 边界、集成者职责和冲突热点规则；`npm run verify:source` 在交接前检查脏文件、stash、worktree HEAD、本地和远端未合并分支、冲突标记以及三处主线 SHA
 

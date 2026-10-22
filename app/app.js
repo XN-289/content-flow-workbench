@@ -609,8 +609,6 @@ function xhsCollectorSource(sourceId) {
           engagement: String(unwrap(blockedInteraction.likedCount) || unwrap(blockedInteraction.liked_count) || unwrap(blockedInteraction.liked) || ""),
           publishedAt: blockedDate && !Number.isNaN(blockedDate.getTime()) ? blockedDate.toISOString() : "",
           coverUrl: allowedCoverUrl(unwrap(unwrap(note.cover)?.urlDefault) || unwrap(unwrap(note.cover)?.url)),
-          xsecToken: unwrap(unwrappedEntry.xsecToken) || unwrap(note.xsecToken) || "",
-          noteId: "",
           reason: "note-id-unavailable"
         });
         continue;

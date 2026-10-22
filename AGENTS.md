@@ -34,7 +34,7 @@ npm start
 
 ## 2. 不可破坏（改 UI 也不许动）
 
-- 数据结构与 API 契约；`npm run test:chain`（32 项）必须通过。
+- 数据结构与 API 契约；`npm run test:chain`（41 项）必须通过。
 - 选题状态机：`topic → outline → draft → production → review → ready-to-publish → published → reviewed`，门槛由服务端校验。
 - 诚实语义：`本地演练`、`blocked`、`待人工`、`unverified`、采集失败，必须显式呈现，不能伪装成成功。
 - 平台能力矩阵只能使用 `complete / partial / unsupported / unknown`，登录墙和人工可见范围不能被写成完整自动采集。
@@ -55,10 +55,8 @@ npm start
 
 ## 4. 完成定义（DoD）
 
-- [ ] `node --check scripts/build-ui.mjs`
-- [ ] `node --check scripts/server.mjs`
-- [ ] `npm run build:ui` 成功，`app/dist/index.html` 存在
-- [ ] `npm run test:chain` 全部通过
+- [ ] `npm run verify:workbench` 全部通过；它顺序覆盖语法、41 项主链路、后端流水线、信源、批量采集、插件、TypeScript、diff 与 UI 构建
+- [ ] `app/dist/index.html` 存在，且本轮资源由 `npm run build:ui` 重新生成
 - [ ] 在 `AUTOMATION_ENABLED=false` 下，`/`、`/flow`、`/workflow`、`/system` 与 `/api/state` 均返回 200
 - [ ] 缺失 `/assets/**` 返回 404；越出 `app/dist` 的路径返回 403
 - [ ] 截图：1440×1000、390×844、375×812、深色模式；涉及移动浮层时补横屏
@@ -74,10 +72,10 @@ npm start
 ## 5. 命令速查
 
 ```powershell
-# 成品构建（前端源码或 token 变更后必跑）
-npm run build:ui
+# 一键验收：语法、41 项主链路、后端、信源、批量、插件、类型、diff、UI 构建
+npm run verify:workbench
 
-# 业务链路回归（32 项）
+# 只定位业务链路回归（41 项）
 npm run test:chain
 
 # 单一源码终态检查；要求 main 干净且已推送
@@ -115,7 +113,7 @@ Invoke-WebRequest http://127.0.0.1:5177/api/state -UseBasicParsing
 
 1. 可运行的 React 成品与最新 `app/dist` 构建结果。
 2. 四工作域 + 三视口 + 暗色截图。
-3. `npm run test:chain` 结果与单端口 HTTP 检查结果。
+3. `npm run verify:workbench` 结果与单端口 HTTP 检查结果。
 4. `docs/DECISIONS.md` 新增条目。
 5. 最终提交 SHA、已合入分支、`npm run verify:source` 结果。
 6. 仍未完成项与已知风险，明确写出来。

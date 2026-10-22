@@ -1,0 +1,92 @@
+{
+  "name": "content-flow-workbench",
+  "displayName": "Content Flow Workbench",
+  "protocolVersion": 3,
+  "client": "./client.mjs",
+  "runtime": {
+    "mode": "local-http",
+    "baseUrl": "http://127.0.0.1:5177",
+    "originPolicy": "http-origin-on-loopback-only",
+    "credentialsIncluded": false,
+    "discovery": {
+      "baseUrlEnv": "CONTENT_FLOW_WORKBENCH_URL",
+      "runtimeFileEnv": "CONTENT_FLOW_WORKBENCH_RUNTIME_FILE",
+      "defaultPort": 5177
+    }
+  },
+  "methods": [
+    {
+      "name": "getManifest",
+      "httpMethod": "GET",
+      "endpoint": "/api/agent-plugin/manifest"
+    },
+    {
+      "name": "getState",
+      "httpMethod": "GET",
+      "endpoint": "/api/state"
+    },
+    {
+      "name": "getPlatformCapabilities",
+      "httpMethod": "GET",
+      "endpoint": "/api/platform-capabilities"
+    },
+    {
+      "name": "intakeSource",
+      "httpMethod": "POST",
+      "endpoint": "/api/source-intake"
+    },
+    {
+      "name": "captureXiaohongshuNote",
+      "httpMethod": "POST",
+      "endpoint": "/api/xhs/guest-capture",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Xiaohongshu share text, short link, or note URL."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "captureTranscript",
+      "httpMethod": "POST",
+      "endpoint": "/api/signals/transcript"
+    },
+    {
+      "name": "createAnalysis",
+      "httpMethod": "POST",
+      "endpoint": "/api/signals/analysis"
+    },
+    {
+      "name": "createAgentTask",
+      "httpMethod": "POST",
+      "endpoint": "/api/agent-tasks/create"
+    },
+    {
+      "name": "exportKnowledge",
+      "httpMethod": "POST",
+      "endpoint": "/api/knowledge/export"
+    },
+    {
+      "name": "runMorningPipeline",
+      "httpMethod": "POST",
+      "endpoint": "/api/morning-pipeline/run"
+    }
+  ],
+  "evidencePolicy": {
+    "defaultState": "unverified",
+    "transcriptQuotesRequireTimestamps": true
+  },
+  "safetyBoundary": [
+    "The client accepts only http origins on 127.0.0.1 or localhost.",
+    "Every method resolves to a manifest-declared relative /api/** endpoint on the selected loopback origin.",
+    "No cookies, login state, browser profiles, CAPTCHA responses, or capture tokens are exported.",
+    "Login walls and security checks require the human user."
+  ]
+}

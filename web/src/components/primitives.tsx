@@ -376,11 +376,35 @@ export function Field({
   error?: string;
   children: React.ReactNode;
 }) {
+  const generatedId = useId();
+  const child = React.isValidElement(children) ? children : null;
+  const childProps = (child?.props || {}) as React.HTMLAttributes<HTMLElement> & { id?: string };
+  const controlId = childProps.id || generatedId;
+  const isFormControl = child && ["input", "textarea", "select"].includes(String(child.type));
+  const hintId = hint ? `${controlId}-hint` : "";
+  const errorId = error ? `${controlId}-error` : "";
+  const describedBy = [
+    childProps["aria-describedby"],
+    errorId,
+    hintId
+  ].filter(Boolean).join(" ") || undefined;
+  const fieldControl = isFormControl
+    ? React.cloneElement(child as React.ReactElement<any>, {
+        id: controlId,
+        "aria-describedby": describedBy,
+        "aria-invalid": error ? true : childProps["aria-invalid"]
+      })
+    : children;
+
   return (
     <div className="field">
-      <label>{label}</label>
-      {children}
-      {error ? <span className="field-error">{error}</span> : hint ? <span className="hint">{hint}</span> : null}
+      {isFormControl ? <label htmlFor={controlId}>{label}</label> : <span className="field-label">{label}</span>}
+      {fieldControl}
+      {error ? (
+        <span className="field-error" id={errorId} role="alert">{error}</span>
+      ) : hint ? (
+        <span className="hint" id={hintId}>{hint}</span>
+      ) : null}
     </div>
   );
 }

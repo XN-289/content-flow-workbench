@@ -1,4 +1,5 @@
 import http from "node:http";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -6,6 +7,11 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { platformCapabilityRuntime } from "./platform-capabilities.mjs";
+import { sanitizeStateBlockedSnapshots } from "./blocked-snapshot-sanitizer.mjs";
+import {
+  agentPluginContractVersion,
+  agentPluginMethods
+} from "./agent-plugin-contract.mjs";
 import { createSignalEvidencePackage } from "./evidence-package.mjs";
 import { normalizeDetailCapture } from "./detail-evidence.mjs";
 import {
@@ -18,6 +24,7 @@ import {
 } from "./morning-pipeline.mjs";
 import { resolveSourceIntakeUrl } from "./source-intake.mjs";
 import { applyTranscriptResult, selectTranscriptMedia } from "./transcribe-signal.mjs";
+import { publicShareUrl } from "./knowledge-export.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const checks = [];
@@ -160,6 +167,7 @@ async function startWorkbench(port, dataFile, dropDir, bridgeRoot, backupDir, ev
       BACKUP_DIR: backupDir,
       EVIDENCE_DIR: evidenceDir,
       TRANSCRIPT_DIR: transcriptDir,
+      CONTENT_FLOW_WORKBENCH_RUNTIME_FILE: path.join(tempRoot, "runtime-locator.json"),
       WORKBENCH_ASR_CONFIG: path.join(tempRoot, "missing-asr-runtime.local.json"),
       AUTOMATION_ENABLED: "false",
       AUTOMATION_TICK_MS: "60000",
@@ -729,6 +737,7 @@ async function main() {
   const blockedProfileSource = (await api(base, "/api/source-intake", {
     text: "@游客态受限博主 在小红书已经有232篇笔记 https://www.xiaohongshu.com/user/profile/blockedregression"
   })).source;
+  const inboxBeforeBlocked = (await state(base)).runtime.inbox;
   const blockedProfileCapture = (await api(base, "/api/browser-capture", {
     sourceId: blockedProfileSource.id,
     context: {
@@ -763,11 +772,81 @@ async function main() {
   equal(blockedCommand.controlStatus, "manual", "blocked source command status");
   equal(blockedCommand.primaryAction, "capture", "blocked source command action");
   match(blockedCommand.nextAction, /缺少可打开 noteId.*App 分享/, "blocked source command next action");
+  equal(blockedCommand.blockedPreviews.length, 12, "blocked source command preview count");
+  const allowedPreviewKeys = new Set(["title", "engagement", "publishedAt", "coverUrl", "reason"]);
+  truthy(
+    blockedCommand.blockedPreviews.every((preview) => (
+      Object.keys(preview).every((key) => allowedPreviewKeys.has(key))
+    )),
+    "blocked source command preview exposes only safe fields"
+  );
+  equal(
+    blockedCommand.blockedPreviews.some((preview) => JSON.stringify(preview).includes("token-")),
+    false,
+    "blocked source command preview strips xsec token"
+  );
+  equal(current.runtime.inbox.total, inboxBeforeBlocked.total, "blocked previews do not change Inbox total");
+  equal(current.runtime.inbox.pending, inboxBeforeBlocked.pending, "blocked previews do not change Inbox pending count");
   const blockedSnapshot = current.rawSnapshots.find((snapshot) => snapshot.runId === blockedProfileCapture.id);
   const blockedSnapshotContent = JSON.parse(blockedSnapshot.content);
   equal(blockedSnapshotContent.blockedItems.length, 12, "blocked profile raw snapshot item count");
+  equal(
+    blockedSnapshotContent.blockedItems.some((item) => Object.hasOwn(item, "xsecToken")),
+    false,
+    "blocked profile raw snapshot strips xsec token"
+  );
   equal(blockedSnapshotContent.context.privateApiCalled, false, "blocked profile raw snapshot boundary");
-  pass("小红书主页游客态可见但缺 noteId 时保留 blocked 快照，不伪造 Inbox 链接");
+  pass("小红书主页游客态可见但缺 noteId 时保留安全预览，不伪造链接或污染 Inbox");
+
+  const historicalSnapshotState = {
+    signals: [{
+      id: "historical-signal",
+      url: "https://www.xiaohongshu.com/explore/historical?xsec_token=keep-signal-token"
+    }],
+    rawSnapshots: [{
+      id: "historical-snapshot",
+      content: JSON.stringify({
+        items: [{
+          url: "https://www.xiaohongshu.com/explore/importable?xsec_token=keep-item-token"
+        }],
+        blockedItems: [{
+          title: "历史受限卡片",
+          engagement: "88",
+          publishedAt: "2026-10-21T00:00:00.000Z",
+          coverUrl: "https://sns-img-xhscdn.xhscdn.com/historical.jpg",
+          reason: "note-id-unavailable",
+          xsecToken: "remove-snapshot-token",
+          noteId: ""
+        }],
+        context: { privateApiCalled: false }
+      })
+    }]
+  };
+  const sanitizedHistoricalState = sanitizeStateBlockedSnapshots(historicalSnapshotState);
+  equal(sanitizedHistoricalState.changedSnapshots, 1, "historical blocked snapshot changed count");
+  equal(sanitizedHistoricalState.removedFields, 2, "historical blocked snapshot removed field count");
+  const sanitizedHistoricalContent = JSON.parse(sanitizedHistoricalState.state.rawSnapshots[0].content);
+  equal(
+    Object.keys(sanitizedHistoricalContent.blockedItems[0]).sort().join(","),
+    "coverUrl,engagement,publishedAt,reason,title",
+    "historical blocked snapshot exposes only safe fields"
+  );
+  equal(
+    sanitizedHistoricalState.state.signals[0].url,
+    historicalSnapshotState.signals[0].url,
+    "historical sanitizer preserves signal URLs"
+  );
+  equal(
+    sanitizedHistoricalContent.items[0].url,
+    "https://www.xiaohongshu.com/explore/importable?xsec_token=keep-item-token",
+    "historical sanitizer preserves importable item URLs"
+  );
+  equal(
+    sanitizeStateBlockedSnapshots(sanitizedHistoricalState.state).changedSnapshots,
+    0,
+    "historical blocked snapshot sanitizer is idempotent"
+  );
+  pass("历史受限快照只保留安全预览字段，账号信号和可导入链接不变");
 
   const evidenceSignal = current.signals.find((signal) => signal.url === "https://www.xiaohongshu.com/explore/four");
   const firstEvidence = await api(base, "/api/evidence-packages/create", { signalId: evidenceSignal.id });
@@ -1001,6 +1080,237 @@ async function main() {
   );
   pass("后台转写立即返回 running 占位，轮询到终态且不会重复插入运行记录");
 
+  await failingApi(
+    base,
+    "/api/signals/analysis",
+    { signalId: evidenceSignal.id },
+    /还没有逐字稿/
+  );
+  const invalidTimelineImport = await api(base, "/api/import", {
+    signals: [{
+      url: evidenceSignal.url,
+      transcriptStatus: "captured",
+      transcriptText: "这条逐字稿有全文，但时间轴分段无效。",
+      transcriptSegments: [{ start: "invalid", end: 2, text: "这条逐字稿有全文，但时间轴分段无效。" }]
+    }]
+  });
+  equal(invalidTimelineImport.totals.signals.merged, 1, "invalid timeline fixture merges existing signal");
+  current = await state(base);
+  const invalidTimelineSignal = current.signals.find((signal) => signal.id === evidenceSignal.id);
+  equal(
+    invalidTimelineSignal.transcriptText,
+    "这条逐字稿有全文，但时间轴分段无效。",
+    "invalid timeline fixture persists transcript text"
+  );
+  equal(invalidTimelineSignal.transcriptSegments.length, 1, "invalid timeline fixture persists segment");
+  const invalidTimelineAnalysis = await failingApi(
+    base,
+    "/api/signals/analysis",
+    { signalId: evidenceSignal.id },
+    /可用的时间轴分段/
+  );
+  equal(invalidTimelineAnalysis.status, 400, "invalid timeline analysis HTTP status");
+
+  const transcriptFixture = {
+    transcriptStatus: "captured",
+    transcriptText: "很多普通人以为社交靠讨好，但其实真正重要的是边界。第一，先识别自己的感受。第二，表达需求。最后，勇敢承担关系变化。你不需要让所有人满意。",
+    transcriptModel: "regression-local-asr",
+    transcriptDurationSeconds: 42,
+    transcriptCapturedAt: "2026-10-22T00:00:00.000Z",
+    transcriptSegments: [
+      {
+        start: 0,
+        end: 8,
+        startTimestamp: "00:00.000",
+        endTimestamp: "00:08.000",
+        text: "很多普通人以为社交靠讨好。"
+      },
+      {
+        start: 8,
+        end: 18,
+        startTimestamp: "00:08.000",
+        endTimestamp: "00:18.000",
+        text: "但其实真正重要的是边界。"
+      },
+      {
+        start: 18,
+        end: 29,
+        startTimestamp: "00:18.000",
+        endTimestamp: "00:29.000",
+        text: "第一，先识别自己的感受；第二，表达需求。"
+      },
+      {
+        start: 29,
+        end: 42,
+        startTimestamp: "00:29.000",
+        endTimestamp: "00:42.000",
+        text: "最后，勇敢承担关系变化，你不需要让所有人满意。"
+      }
+    ]
+  };
+  await api(base, "/api/import", {
+    signals: [{ url: evidenceSignal.url, ...transcriptFixture }]
+  });
+  current = await state(base);
+  const mergedTranscriptSignal = current.signals.find((signal) => signal.id === evidenceSignal.id);
+  equal(mergedTranscriptSignal.transcriptStatus, "captured", "analysis fixture transcript status");
+  equal(mergedTranscriptSignal.transcriptSegments.length, 4, "analysis fixture segment count");
+  truthy(
+    current.signals.length === current.signals.filter((signal, index, list) => (
+      list.findIndex((candidate) => candidate.id === signal.id) === index
+    )).length,
+    "analysis fixture preserves unique signal identities"
+  );
+
+  const firstAnalysisResponse = await api(base, "/api/signals/analysis", {
+    signalId: evidenceSignal.id
+  });
+  equal(firstAnalysisResponse.reused, false, "first transcript analysis is newly generated");
+  const firstAnalysis = firstAnalysisResponse.analysis;
+  equal(firstAnalysis.evidenceState, "unverified", "transcript analysis evidence state");
+  equal(firstAnalysis.input.transcriptModel, transcriptFixture.transcriptModel, "analysis transcript model");
+  equal(firstAnalysis.input.segmentCount, transcriptFixture.transcriptSegments.length, "analysis segment count");
+  truthy(firstAnalysis.analysis.quotes.length > 0, "analysis returns traceable quotes");
+  const quoteCandidates = [
+    firstAnalysis.analysis.hook.quote,
+    firstAnalysis.analysis.promiseAndTension.quote,
+    ...firstAnalysis.analysis.structure.map((part) => part.quote),
+    ...firstAnalysis.analysis.audience.map((item) => item.quote),
+    ...firstAnalysis.analysis.retention.map((item) => item.quote),
+    ...firstAnalysis.analysis.emotionalPayoff.cues.map((item) => item.quote),
+    ...firstAnalysis.analysis.quotes
+  ].filter(Boolean);
+  for (const quote of quoteCandidates) {
+    truthy(quote.startTimestamp, "analysis quote start timestamp");
+    truthy(quote.endTimestamp, "analysis quote end timestamp");
+    match(quote.startTimestamp, /^(?:\d{2}:)?\d{2}:\d{2}\.\d{3}$/, "analysis quote start format");
+    match(quote.endTimestamp, /^(?:\d{2}:)?\d{2}:\d{2}\.\d{3}$/, "analysis quote end format");
+  }
+  const serializedAnalysis = JSON.stringify(firstAnalysis);
+  truthy(!/NaN|Invalid Date|\bundefined\b/.test(serializedAnalysis), "analysis contains no invalid display values");
+
+  current = await state(base);
+  const firstSignalAnalysisRuns = current.analysisRuns.filter((run) => run.signalId === evidenceSignal.id);
+  equal(firstSignalAnalysisRuns.length, 1, "first analysis run persistence count");
+
+  const reusedAnalysisResponse = await api(base, "/api/signals/analysis", {
+    signalId: evidenceSignal.id
+  });
+  equal(reusedAnalysisResponse.reused, true, "unchanged transcript reuses analysis");
+  equal(reusedAnalysisResponse.analysis.id, firstAnalysis.id, "reused analysis keeps identity");
+  current = await state(base);
+  equal(
+    current.analysisRuns.filter((run) => run.signalId === evidenceSignal.id).length,
+    1,
+    "reused analysis does not duplicate persisted runs"
+  );
+
+  const forcedAnalysisResponse = await api(base, "/api/signals/analysis", {
+    signalId: evidenceSignal.id,
+    force: true
+  });
+  equal(forcedAnalysisResponse.reused, false, "forced analysis creates a new run");
+  truthy(forcedAnalysisResponse.analysis.id !== firstAnalysis.id, "forced analysis receives a new ID");
+  current = await state(base);
+  equal(
+    current.analysisRuns.filter((run) => run.signalId === evidenceSignal.id).length,
+    2,
+    "forced analysis persists a second run"
+  );
+  pass("逐字稿分析拒绝缺失文本和无效时间轴，并保留 unverified 带时间戳引文与可复用输入哈希");
+
+  const analysisTaskResponse = await api(base, "/api/agent-tasks/create", {
+    agent: "codex",
+    kind: "dissect",
+    title: "深挖流量结构：回归样本",
+    objective: "基于全文逐字稿和时间轴解释内容结构，并给出可验证的创作假设。",
+    signalId: evidenceSignal.id
+  });
+  const analysisTask = analysisTaskResponse.task;
+  equal(analysisTask.signalId, evidenceSignal.id, "analysis Agent task signal binding");
+  const analysisTaskJson = JSON.parse(await fs.readFile(path.join(analysisTask.outboxPath, "task.json"), "utf8"));
+  const analysisTaskMarkdown = await fs.readFile(path.join(analysisTask.outboxPath, "task.md"), "utf8");
+  equal(analysisTaskJson.signalId, evidenceSignal.id, "analysis task.json signal binding");
+  truthy(analysisTaskJson.prompt.includes(transcriptFixture.transcriptText), "analysis task.json preserves full transcript");
+  truthy(analysisTaskMarkdown.includes(transcriptFixture.transcriptText), "analysis task.md preserves full transcript");
+  truthy(analysisTaskMarkdown.includes('"startTimestamp": "00:18.000"'), "analysis task includes segment start timestamp");
+  truthy(analysisTaskMarkdown.includes('"endTimestamp": "00:29.000"'), "analysis task includes segment end timestamp");
+  truthy(analysisTaskMarkdown.includes(transcriptFixture.transcriptModel), "analysis task includes ASR model");
+  truthy(analysisTaskMarkdown.includes("unverified"), "analysis task preserves unverified evidence state");
+  truthy(analysisTaskMarkdown.includes('"textTruncated": false'), "analysis task does not truncate the focused transcript");
+  current = await state(base);
+  const persistedAnalysisTask = current.agentTasks.find((task) => task.id === analysisTask.id);
+  equal(persistedAnalysisTask.signalId, evidenceSignal.id, "persisted analysis Agent task signal binding");
+  pass("Agent 深挖任务携带绑定 signalId、全文逐字稿、时间轴、ASR 模型和 unverified 边界");
+
+  await fs.writeFile(path.join(analysisTask.outboxPath, "result.md"), "# 回归拆解\n\n只作为待核对假设。", "utf8");
+  await api(base, "/api/agent-tasks/import", { id: analysisTask.id });
+  current = await state(base);
+  const importedAnalysisMaterial = current.materials.find((material) => (
+    material.sourceUrl === `workbench://agent-task/${analysisTask.id}`
+  ));
+  equal(importedAnalysisMaterial?.evidenceState, "unverified", "imported analysis material evidence state");
+  pass("Agent 深挖结果导入素材时保持 unverified，不自动升级为已核实证据");
+
+  await api(base, "/api/agent-bridge/settings", { driveRoot });
+  const knowledgeExportResponse = await api(base, "/api/knowledge/export", { driveRoot });
+  equal(knowledgeExportResponse.export.evidenceState, "unverified", "knowledge export evidence state");
+  equal(knowledgeExportResponse.export.analysisCount, 2, "knowledge export analysis count");
+  equal(knowledgeExportResponse.export.transcriptCount, 2, "knowledge export transcript count");
+  const knowledgeRoot = path.join(driveRoot, "ContentFlowWorkbench", "Knowledge");
+  const knowledgeManifest = JSON.parse(await fs.readFile(path.join(knowledgeRoot, "manifest.json"), "utf8"));
+  equal(knowledgeManifest.evidenceState, "unverified", "knowledge manifest evidence state");
+  equal(knowledgeManifest.privacy.credentialsIncluded, false, "knowledge manifest excludes credentials");
+  equal(knowledgeManifest.privacy.cookiesIncluded, false, "knowledge manifest excludes cookies");
+  equal(knowledgeManifest.privacy.loginStateIncluded, false, "knowledge manifest excludes login state");
+  truthy(knowledgeManifest.files.length >= 3, "knowledge manifest lists exported files");
+  for (const file of knowledgeManifest.files) {
+    match(file.sha256, /^[a-f0-9]{64}$/, "knowledge manifest SHA-256 format");
+    const content = await fs.readFile(path.join(knowledgeRoot, ...file.path.split("/")));
+    const actualHash = crypto.createHash("sha256").update(content).digest("hex");
+    equal(file.sha256, actualHash, `knowledge manifest hash for ${file.path}`);
+  }
+  equal(
+    publicShareUrl("https://user:secret@example.com/article?xsec_token=secret#access_token=fragment"),
+    "",
+    "knowledge export rejects URL credentials"
+  );
+  equal(
+    publicShareUrl("https://example.com/article?xsec_token=secret&ref=share#access_token=fragment"),
+    "https://example.com/article?ref=share",
+    "knowledge export strips sensitive query values and fragments"
+  );
+  pass("Google Drive 显式导出生成可重算 SHA-256 清单，并声明不包含凭据、Cookie 和登录态");
+
+  const pluginManifestResponse = await requestJson(base, "/api/agent-plugin/manifest", null, "GET");
+  equal(pluginManifestResponse.status, 200, "agent plugin manifest HTTP status");
+  equal(
+    pluginManifestResponse.payload.protocolVersion,
+    agentPluginContractVersion,
+    "agent plugin manifest protocol version"
+  );
+  equal(
+    pluginManifestResponse.payload.capabilities.length,
+    agentPluginMethods.length,
+    "agent plugin capability count"
+  );
+  equal(
+    pluginManifestResponse.payload.runtime.baseUrl,
+    base,
+    "agent plugin manifest uses the running local service origin"
+  );
+  const pluginRoutes = new Set(pluginManifestResponse.payload.capabilities.map((capability) => capability.endpoint));
+  for (let index = 0; index < agentPluginMethods.length; index += 1) {
+    const expected = agentPluginMethods[index];
+    const actual = pluginManifestResponse.payload.capabilities[index];
+    equal(actual.name, expected.name, `agent plugin method ${index} name`);
+    equal(actual.method, expected.httpMethod, `agent plugin method ${index} HTTP verb`);
+    equal(actual.endpoint, expected.endpoint, `agent plugin method ${index} endpoint`);
+    truthy(pluginRoutes.has(expected.endpoint), `agent plugin manifest route ${expected.endpoint}`);
+  }
+  equal(pluginManifestResponse.payload.runtime.credentialsIncluded, false, "agent plugin excludes credentials");
+  pass(`本地插件协议 v${pluginManifestResponse.payload.protocolVersion} 固定公开 ${agentPluginMethods.length} 个方法，覆盖读取、矩阵、登记、逐字稿、分析、Agent 任务、Drive 导出、流水线和游客详情采集`);
+
   // A 200 HTML response is a failed collection, not a successful RSS import.
   const feedSource = (await api(base, "/api/import", {
     sources: [{
@@ -1058,11 +1368,14 @@ async function main() {
       { platform: "xiaohongshu" }
     ]
   });
-  equal(capability.platforms.map((platform) => platform.id).join(","), "x,xiaohongshu,douyin,wechat", "platform capability platform order");
+  equal(capability.platforms.map((platform) => platform.id).join(","), "x,xiaohongshu,douyin,bilibili,wechat", "platform capability platform order");
   equal(capability.platforms.find((platform) => platform.id === "x").sourceCount, 2, "X platform source count");
   equal(capability.platforms.find((platform) => platform.id === "x").capabilities.comments.status, "unsupported", "X comments capability status");
   equal(capability.platforms.find((platform) => platform.id === "xiaohongshu").capabilities.list.status, "partial", "XHS list capability status");
   equal(capability.platforms.find((platform) => platform.id === "xiaohongshu").capabilities.transcript.status, "partial", "XHS transcript capability status");
+  equal(capability.platforms.find((platform) => platform.id === "bilibili").capabilities.transcript.status, "partial", "Bilibili transcript capability status");
+  equal(capability.platforms.find((platform) => platform.id === "wechat").capabilities.detail.status, "partial", "WeChat detail capability remains partial until fixture proof");
+  equal(capability.platforms.find((platform) => platform.id === "wechat").capabilities.body.status, "partial", "WeChat body capability remains partial until fixture proof");
   const allowedCapabilityStatuses = new Set(["complete", "partial", "unsupported", "unknown"]);
   truthy(
     capability.platforms.every((platform) => (
@@ -1121,7 +1434,7 @@ async function main() {
   );
   equal(
     current.runtime.platformCapabilities.platforms.map((platform) => platform.id).join(","),
-    "x,xiaohongshu,douyin,wechat",
+    "x,xiaohongshu,douyin,bilibili,wechat",
     "runtime platform capability platform order"
   );
   pass("晨间流水线保留 pending / failed 真实状态，运行记录按最新在前排列");
@@ -1343,6 +1656,67 @@ async function main() {
   equal(restartedState.agentTasks.find((task) => task.id === outlineTask.id).status, "outbox", "restarted dead Agent task status");
   equal(await fs.readFile(path.join(lockTask.outboxPath, "task.lock"), "utf8").catch(() => ""), "", "removed stale Agent lock");
   pass("Agent 进程消失后恢复为 outbox，并清理 stale lock");
+
+  const resultRecoveryTask = (await api(base, "/api/agent-tasks/create", {
+    agent: "codex",
+    kind: "research",
+    title: "Recovered result task",
+    objective: "Return a result after a stale local process lock."
+  })).task;
+  await fs.writeFile(path.join(resultRecoveryTask.outboxPath, "result.md"), "# Recovered\n\nResult survived a stale lock.", "utf8");
+  await stopProcess(workbenchProcess);
+  diskState = JSON.parse(await fs.readFile(dataFile, "utf8"));
+  const recoveryTask = diskState.agentTasks.find((task) => task.id === resultRecoveryTask.id);
+  recoveryTask.status = "running";
+  recoveryTask.localProcessPid = 999999;
+  await fs.writeFile(path.join(recoveryTask.outboxPath, "task.lock"), JSON.stringify({
+    taskId: recoveryTask.id,
+    pid: 999999,
+    acquiredAt: new Date().toISOString()
+  }), "utf8");
+  await fs.writeFile(dataFile, JSON.stringify(diskState, null, 2), "utf8");
+  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir, transcriptDir);
+  await waitForServer(base);
+  let recoveredResultState = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    recoveredResultState = await state(base);
+    if (recoveredResultState.agentTasks.find((task) => task.id === resultRecoveryTask.id)?.status === "result-ready") break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const recoveredTask = recoveredResultState.agentTasks.find((task) => task.id === resultRecoveryTask.id);
+  equal(recoveredTask.status, "result-ready", "dead local process with a result becomes result-ready");
+  equal(recoveredTask.resultText, "# Recovered\n\nResult survived a stale lock.", "recovered result text");
+  equal(recoveredTask.localProcessPid, null, "recovered result clears stale local process pid");
+  equal(await fs.readFile(path.join(recoveryTask.outboxPath, "task.lock"), "utf8").catch(() => ""), "", "recovered result clears stale lock");
+  pass("Agent 结果先于失效进程回流时进入 result-ready，并清理 PID 与锁");
+
+  await api(base, "/api/agent-tasks/import", { id: resultRecoveryTask.id });
+  await stopProcess(workbenchProcess);
+  diskState = JSON.parse(await fs.readFile(dataFile, "utf8"));
+  const importedRecoveryTask = diskState.agentTasks.find((task) => task.id === resultRecoveryTask.id);
+  importedRecoveryTask.localProcessPid = 999998;
+  await fs.writeFile(path.join(importedRecoveryTask.outboxPath, "task.lock"), JSON.stringify({
+    taskId: importedRecoveryTask.id,
+    pid: 999997,
+    acquiredAt: new Date().toISOString()
+  }), "utf8");
+  await fs.writeFile(dataFile, JSON.stringify(diskState, null, 2), "utf8");
+  workbenchProcess = await startWorkbench(workbenchPort, dataFile, dropDir, bridgeRoot, backupDir, evidenceDir, transcriptDir);
+  await waitForServer(base);
+  let cleanedImportedState = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    cleanedImportedState = await state(base);
+    const task = cleanedImportedState.agentTasks.find((item) => item.id === resultRecoveryTask.id);
+    const lockExists = await fs.stat(path.join(task.outboxPath, "task.lock")).then(() => true).catch(() => false);
+    if (task.localProcessPid == null && !lockExists) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const cleanedImportedTask = cleanedImportedState.agentTasks.find((task) => task.id === resultRecoveryTask.id);
+  equal(cleanedImportedTask.status, "imported", "imported result task status retained");
+  equal(cleanedImportedTask.localProcessPid, null, "imported result task clears dead local process pid");
+  equal(await fs.readFile(path.join(cleanedImportedTask.outboxPath, "task.lock"), "utf8").catch(() => ""), "", "imported result task clears dead lock");
+  truthy(cleanedImportedTask.localRunMetadataCleanedAt, "imported result task records stale metadata cleanup");
+  pass("已导入任务只在结果哈希匹配且 PID 与锁均已失效时清理旧运行元数据");
 
   const manualBackup = (await api(base, "/api/backups/create", {})).backup;
   equal(manualBackup.created, true, "manual backup created flag");

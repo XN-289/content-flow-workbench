@@ -156,12 +156,20 @@ export async function transcribeSignal(signal, {
     if (onProgress) await onProgress(stage);
   };
   if (!signal?.id) return failureResult({ signal: {}, media: null, startedAt, error: "signalId is required", runId });
-  if (!force && signal.transcriptStatus === "captured" && String(signal.transcriptText || "").trim()) {
+  const hasPlatformSubtitle = String(signal.transcriptSource || "").startsWith("platform-subtitle:")
+    && String(signal.transcriptText || "").trim();
+  if (
+    (hasPlatformSubtitle || !force)
+    && signal.transcriptStatus === "captured"
+    && String(signal.transcriptText || "").trim()
+  ) {
     return {
       ok: true,
       skipped: true,
       signalId: signal.id,
-      reason: "这条信号已有真实逐字稿；如需覆盖请显式重新转写。",
+      reason: hasPlatformSubtitle
+        ? "这条信号已有平台字幕；强制本地 ASR 不会覆盖平台原文。"
+        : "这条信号已有真实逐字稿；如需覆盖请显式重新转写。",
       run: {
         id: runId,
         signalId: signal.id,
@@ -169,7 +177,7 @@ export async function transcribeSignal(signal, {
         finishedAt: now(),
         status: "skipped",
         error: "",
-        nextAction: "无需重复转写"
+        nextAction: hasPlatformSubtitle ? "直接校对平台字幕原文" : "无需重复转写"
       }
     };
   }

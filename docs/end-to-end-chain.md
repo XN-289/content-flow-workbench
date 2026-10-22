@@ -1,31 +1,39 @@
 # End-to-End Content Chain
 
-- 版本：v0.2
-- 日期：2026-10-19
-- 适用范围：X、小红书、抖音、公众号的信号采集、素材沉淀、口播生产、三平台发布和复盘
+- 版本：v0.4
+- 日期：2026-10-22
+- 适用范围：X、小红书、抖音、公众号的信源登记、标题 / 封面 / 全文逐字稿、候选分析、Agent 深挖、知识导出、素材沉淀、口播生产、三平台发布和复盘
 
 ## 1. 总链路
 
 ```text
 信源注册
   ↓
-定时 / 手动采集
+平台能力矩阵 + 定时 / 手动 / 用户显式采集
   ↓
 raw snapshot + collection run
   ↓
 多层身份去重 + 相对互动倍数
   ↓
-Inbox
+标题 / 正文 / 封面 / 媒体清单
+  ↓
+全文逐字稿 + 时间轴（字幕优先，单条完整视频可选本地 ASR）
+  ↓
+候选流量与内容机制分析（unverified）
+  ↓
+完整上下文交给 Agent 深挖
+  ↓
+显式导出 Google Drive 知识树
+  ↓
+用户判断与取舍
   ↓
 discard / watch / dissect / material / topic / produce
   ↓        ↓                 ↓
 观察池   素材与热评库      选题池
               ↓                 ↓
-           拆解与证据包     Agent 任务包
+           拆解与证据包      outline / script 候选稿
                               ↓
-                     outline / script 候选稿
-                              ↓
-                       人工取舍与稿子版本
+                        人工取舍与稿子版本
                               ↓
                          生产七项检查
                               ↓
@@ -48,6 +56,11 @@ discard / watch / dissect / material / topic / produce
 | --- | --- | --- | --- | --- | --- |
 | 信源注册 | 平台分享文案或主页链接、角色、采集方式、数据边界 | 解析 URL / 昵称 / 粉丝数，校验配置并生成下次运行时间 | 确认保留原因 | `sources` | 未声明数据边界就采集 |
 | 采集 | 到期 source 或手动触发 | RSS / 公开页面抓取、浏览器辅助提交、投递箱扫描、失败退避、覆盖率计算 | 小红书手动滚动和触发书签；历史缺口按提示分批补采 | `collectionRuns`、`rawSnapshots`、候选信号、覆盖率 | 绕过登录、验证码、风控或私有接口 |
+| 详情证据 | 用户打开且当前可见的公开笔记 | 提取标题、正文、封面、媒体清单和 raw snapshot，生成证据包 | 确认页面可读并显式触发 | `signals`、证据包、媒体清单 | 登录墙后抓取、自动滚动或伪造正文 |
+| 逐字稿 | 页面可见字幕，或单条完整公开视频 | 显式下载一个完整 MP4，本地 ASR 生成全文、时间轴、模型和运行记录 | 选择信号、触发转写、后续校对 | `transcriptRuns`、`signals.transcriptText`、`transcriptSegments` | 把正文 / `.m4s` / 字幕链接当作已完成逐字稿 |
+| 候选分析 | 完整逐字稿与有效时间轴 | 生成钩子、结构、节奏、留存机制、情绪回报、作者基线和时间戳引文，按输入哈希复用 | 回原文核对事实与引文 | `analysisRuns` | 把启发式推断说成平台流量因果 |
+| Agent 深挖 | `signalId` 或选题上下文 | 生成含全文逐字稿、时间轴、分析和证据缺口的任务包 | 选择 Agent、确认可外发、导入结果 | `agentTasks`、候选稿 / 素材 | 只给摘要、静默读取“最近一条”或自动升级终稿 |
+| 知识承接 | 已生成逐字稿与分析 | 写入 Drive 同步目录的 manifest、Markdown / JSON、README 和 SHA-256 | 配置桌面同步目录并显式导出 | `knowledgeExports`、Drive 知识树 | 使用 OAuth / API Key、隐式上传或把 mock 当作真实 Drive 验收 |
 | Inbox 去重 | 候选信号 | URL / 内容 ID / 作者标题 / 标题时间四层身份匹配 | 判断价值 | `signals` 与去向标记 | 自动把信号升级为选题或生产 |
 | 素材沉淀 | 信号摘录、热评、评论、外部资料 | 识别热评、数据口径候选、关联选题 | 写“为什么好”和引用边界 | `materials` | 把未核对数据当证据 |
 | 拆解 | 高潜力信号 | 保存原文线索、生成 Agent 任务包 | 完成结构判断和复用决策 | 拆解类素材 | 只收藏不判断 |
@@ -109,26 +122,13 @@ topic → outline → draft → production → review → ready-to-publish → p
 每次修改链路后执行：
 
 ```powershell
-npm run test:chain
+npm run verify:workbench
 ```
 
-当前覆盖 16 项：
+`verify-workbench.mjs` 顺序执行语法检查、41 项主链路、后端流水线、17 项信源登记、7 项批量采集、5 项插件协议、TypeScript、`git diff --check` 和 UI 构建，成功时只输出每步一行，失败时才展开对应日志。发布结论以本次命令输出的 `passed / total` 为准，不沿用历史数字。
 
-1. 重复导入信号不打回 Inbox，并保留人工判断。
-2. API 新导入选题强制从 `topic` 开始。
-3. 重复导入素材保留选题关联和人工价值判断。
-4. 选题按相邻阶段推进，并执行四关卡与七项检查。
-5. 三平台台账与复盘记录是 `published` / `reviewed` 的硬门槛。
-6. 同一选题同一平台发布台账幂等。
-7. 选题阶段不能跳级或回退。
-8. Agent 默认 `local-only`，提纲结果导入并推进到 `outline`，重复导入被拒绝。
-9. 口播稿结果不能绕过 `outline` 阶段直接导入。
-10. 对标分享文案可登记；重复可见采集去重并显示历史覆盖率，重复登记不重置覆盖率。
-11. RSS 收到 200 HTML 时记录 failed，不生成假信号。
-12. 投递箱文件首轮 pending，第二轮稳定后入库并归档。
-13. 工作台页面、采集书签 helper 和 signal / material / topic 编辑表单冒烟通过。
-14. 服务重启后发现仍存活的 Agent 进程时保持 running，不允许重复启动。
-15. Agent 进程消失后恢复为 outbox，并清理 stale lock。
-16. 本地备份支持哈希去重、恢复前保底、显式恢复和非法文件拒绝。
+`chain-regression.mjs` 覆盖信号 / 素材 / 选题身份、状态机、三平台发布与复盘门槛、信源登记与覆盖率、RSS / 投递箱、页面与书签冒烟、备份恢复、Agent 恢复、状态封装、平台能力、逐字稿、分析、知识导出和晨间流水线。`backend-pipeline-regression.mjs` 覆盖流水线状态、事务与失败路径；`plugin-regression.mjs` 覆盖动态端口 locator、九个插件方法、安全拒绝、Agent 全文上下文、Drive 导出和流水线；`source-intake-regression.mjs` 与 `batch-intake-regression.mjs` 分别覆盖单链接分类和多链接粘贴边界。
 
-回归脚本会创建临时 `DATA_FILE`、`DROP_DIR`、`BRIDGE_ROOT`、`BACKUP_DIR`、Drive mock 目录和 mock RSS 服务；不读取真实 `data/workbench.json`，也不写真实投递箱或真实备份目录。
+真实 ASR 成功路径另用 `npm run test:transcript:e2e` 独立验收。该命令要求 Windows 中文 SAPI、`ffmpeg` 和 `data/asr-runtime.local.json` 指向的本地 faster-whisper 模型；脚本生成临时中文语音和 MP4，预置到临时 `TRANSCRIPT_DIR`，并把信号媒体 URL 指向故意不可访问的 CDN 地址，以证明成功路径复用本地完整视频且没有网络下载。随后断言后台运行原位完成、全文 / 时间轴 / 媒体与 JSON 落盘、证据包 SHA-256 匹配、候选分析保持 `unverified` 并按逐字稿哈希复用。该命令不读取真实主数据，也不放入默认验收，因为依赖本机语音、ffmpeg 与模型。
+
+这些回归会创建临时 `DATA_FILE`、`DROP_DIR`、`BRIDGE_ROOT`、`EVIDENCE_DIR`、`TRANSCRIPT_DIR`、`BACKUP_DIR`、Drive mock 目录和 mock RSS 服务；不读取真实 `data/workbench.json`，也不写真实投递箱、证据、逐字稿或备份目录。

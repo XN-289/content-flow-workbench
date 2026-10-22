@@ -24,6 +24,8 @@
 
 平台能力矩阵已进入信息流页，覆盖 X、小红书、抖音、公众号的列表、详情、评论、正文、媒体和逐字稿能力；晨间流水线已进入总览与系统页，六段执行状态和最近运行来自 `/api/state`。两者都是当前成品功能，不是后续示意。
 
+信息流还承担完整研究路径：信号行展示 3:4 封面与逐字稿候选状态，宽版阅读器提供全文 / 时间轴 / 分析三种视图，支持复制、TXT / JSON、生成候选分析和创建 Agent 深挖任务。绑定 `signalId` 的任务会带入全文逐字稿与时间轴；知识导出按钮只在 Drive 目录已配置时可用，并展示导出数量和目标路径。系统页负责 Agent 任务、结果回流和 Drive 目录配置。
+
 ## 1. 技术选型
 
 **React 19 + TypeScript 5.7 + Vite 6 + 纯 CSS tokens + 内嵌 SVG 图标。**
@@ -158,6 +160,9 @@ app/
 
 - `components/primitives.tsx` 提供 Button、StatusChip、Card、QueueRow、Checklist、StageStepper、Sheet 等通用原语。
 - `components/AppShell.tsx` 提供桌面三区骨架和移动端上下文 Sheet；页面不各自复制外壳。
+- `features/flow.tsx` 的 TranscriptReader 是逐字稿阅读与分析的唯一入口；全文、时间轴、分析共用同一信号对象，不复制第二份文本。远程封面使用 `referrerPolicy="no-referrer"`，失败时隐藏。
+- 分析、Agent 深挖和知识导出都必须有显式进行中、失败和完成反馈；`unverified` 不能因为异步请求成功而消失。
+- `features/system.tsx` 的 Agent 表单必须显示绑定信号、目标 Agent、任务类型和本地 / Drive 镜像边界；结果列表只表达候选回流，不表达自动发布。
 - 图标使用内嵌 SVG，默认 `16px`、`stroke-width="1.75"`、`stroke="currentColor"`。有可见文字时图标 `aria-hidden="true"`；纯图标按钮必须有 `aria-label`。
 - Sheet 打开后焦点进入浮层，Tab 与 Shift+Tab 在浮层内循环，Escape 关闭，背景滚动锁定，关闭后焦点回到触发元素。
 - 所有交互控件必须有默认、悬停、聚焦、禁用状态；异步动作增加进行中状态，读取失败增加错误状态。
@@ -214,6 +219,8 @@ node --check scripts/build-ui.mjs
 node --check scripts/server.mjs
 npm run build:ui
 npm run test:chain
+npm run test:plugin
+node scripts/source-intake-regression.mjs
 ```
 
 启动 `npm start` 后补充单端口检查：
@@ -234,6 +241,7 @@ Invoke-WebRequest http://127.0.0.1:5177/api/state -UseBasicParsing
 - 空数据、最小数据、API 失败、加载、待人工、受阻、完成与本地演练状态。
 - 无横向溢出、无控制台异常、无 `undefined`、`NaN`、`[object Object]` 或 `Invalid Date`。
 - Sheet 焦点进入、Tab 循环、Escape 关闭与焦点恢复。
+- 逐字稿全文 / 时间轴 / 分析切换、复制和下载、Agent 深挖反馈、Drive 未配置时的阻止态与已配置时的导出结果。
 - `prefers-reduced-motion: reduce` 下状态仍可理解，Sheet 背景不透明且不与底层文字重叠。
 
 测试失败必须保留真实原因。不得为了通过验收而修改真实业务数据、伪造 API 成功或跳过服务端状态机。

@@ -1,6 +1,6 @@
 const activeTopicStages = new Set(["topic", "outline", "draft", "production", "review", "ready-to-publish"]);
 
-export const automaticCollectionMethods = new Set(["public-rss", "public-page"]);
+export const automaticCollectionMethods = new Set(["public-rss", "public-page", "bilibili-public"]);
 
 export function isScheduledCollectionSource(source = {}) {
   return Boolean(source)
@@ -195,10 +195,8 @@ export function morningPipelineRuntime(state = {}, options = {}) {
     inboxTime: state.settings?.inboxTime || "09:00",
     inboxDailyLimit: inboxLimit,
     stages,
-    nextActions: stages.filter((stage) => ["ready", "attention", "blocked", "pending", "failed", "skipped", "running"].includes(stage.status)).map((stage) => (
-      stage.id === "brief"
-        ? `${stage.label}：${stage.detail}`
-        : `${stage.label}：${stage.detail}`
-    ))
+    nextActions: stages
+      .filter((stage) => ["ready", "attention", "blocked", "pending", "failed", "skipped", "running"].includes(stage.status))
+      .map((stage) => `${stage.label}：${stage.detail}`)
   };
 }

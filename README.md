@@ -1,6 +1,6 @@
 # Content Flow Workbench
 
-本地单人内容工作台，用来把信号采集、素材沉淀、选题、口播生产、发布记录和复盘放在同一个界面里。数据保存在本地 JSON，不依赖数据库和云端服务。
+本地单人全时段内容研究工作台，用来把对标信号、标题与封面、全文逐字稿、流量机制分析、Agent 深挖、素材沉淀、选题、口播生产、发布记录和复盘放在同一条链路里。AI 负责采集、整理、候选分析和上下文分发，用户保留选题判断、审美取舍与终稿确认。数据保存在本地 JSON，不依赖数据库和云端服务。
 
 ## 快速开始
 
@@ -26,7 +26,7 @@ npm run remove-task
 
 首次启动时如果 `data/workbench.json` 不存在，服务会返回空工作台；第一次保存后会自动生成本地主数据。
 
-## 每日节奏
+## 全时段研究与晨间节奏
 
 1. 保持工作台服务运行，默认 08:40 自动检查到期信源。也可以手动执行：
 
@@ -42,10 +42,11 @@ npm run remove-task
 
 2. 看到好内容时，在今日页“快速粘贴”里直接粘贴原文，不用先整理字段。系统会自动识别 URL、标题、点赞数、账号、平台和“热评： ...”“@评论者： ...”格式的评论。
 3. 新对标博主先在账号页“对标账号快速登记”里粘贴平台分享文案或主页链接；小红书短链会解析到最终主页，昵称、粉丝数和采集边界会一起登记。重贴同一主页只更新元数据，不会清空已采集覆盖率。
-4. 09:00 打开今日页，先看自动晨报，再处理 Inbox。
-5. 把高价值信号分成 `dissect`、`material`、`watch`、`discard`。
-6. 需要修正时，直接展开 Inbox、素材、选题卡片里的“编辑”区域；标题、判断备注、用途、引用注意和选题核心内容都可修改。
-7. 生产时从素材库和选题池取输入，不把所有判断都压到写稿环节。
+4. 对认可的笔记补详情证据；有完整公开视频时可显式生成本地逐字稿，阅读全文、时间轴和候选分析。
+5. 09:00 打开今日页，先看自动晨报，再处理 Inbox；其他时段可随时投递链接和补充对标账号。
+6. 把高价值信号分成 `dissect`、`material`、`watch`、`discard`。
+7. 需要修正时，直接展开 Inbox、素材、选题卡片里的“编辑”区域；标题、判断备注、用途、引用注意和选题核心内容都可修改。
+8. 生产时从素材库和选题池取输入，不把所有判断都压到写稿环节。
 
 当前采集器支持：
 
@@ -54,6 +55,8 @@ npm run remove-task
 - `browser-assisted`：用户手动打开页面并滚动到目标范围后，通过粘贴可见列表 JSON 或采集书签读取当前已加载内容。脚本不自动滚动、不调用平台接口、不绕过登录或验证码；账号卡片和采集运行会显示“本页已加载 / 主页显示总数 / 工作台累计入库”，历史补采通过继续滚动并重复点击完成，重复内容自动去重。
 - `manual`、`platform-export`：记录 blocked 状态和下一步人工动作，不伪装成自动成功。
 - `drops/` 本地投递箱：`.json`、`.md`、`.txt` 放入后自动解析、去重、入库，成功进入 `processed/`，失败进入 `failed/`。
+
+信息流中的四平台能力矩阵只使用 `complete / partial / unsupported / unknown` 表达实际边界。公开笔记详情可保存标题、正文、3:4 封面、媒体清单、raw snapshot 和证据包；逐字稿优先使用页面可见字幕，没有字幕时只对用户显式选择的单条完整视频做本地 ASR。ASR 全文、时间轴和启发式流量分析始终标记 `unverified`，不能当作平台因果证明。
 
 ## 自动化调度与本地流水线
 
@@ -79,16 +82,19 @@ npm run remove-task
 
 设计参考与边界见 [docs/automation-research.md](docs/automation-research.md)。下一阶段控制面调研见 [docs/external-automation-research.md](docs/external-automation-research.md)。
 
-## Agent 桥接与 Google Drive
+## Agent 桥接、本地插件与 Google Drive
 
 - 工作台新增“桥接”视图，可以把研究、拆解、提纲、口播稿、标题、平台文案和视觉方案打包成 Agent 任务。
 - 支持 Grok、Muse、Codex、Claude、Cursor 五类目标：Grok / Muse 复制任务后回写 `result.md`；Codex / Claude 支持本机一键运行；Cursor 通过任务目录接入。
+- 绑定信号的任务包会带入完整逐字稿、带时间戳的分段、ASR 模型、最新候选分析和 `unverified` 边界；Agent 输出仍是候选，不自动成为终稿。
 - Google Drive 第一版使用桌面同步目录，不保存 API Key、不做 OAuth。任务默认仅本地保存；创建任务时显式勾选后，才镜像到 `<Drive>/ContentFlowWorkbench/Outbox/<task-id>/`。
+- 系统页可显式导出知识树到 `<Drive>/ContentFlowWorkbench/Knowledge/`，生成 manifest、Markdown / JSON 和 SHA-256；默认不包含 Cookie、登录态、capture token 或浏览器 profile。
 - 服务每 30 秒扫描本地和 Drive 侧结果，取较新的 `result.md`；提纲和口播稿导入生产稿版本，其他结果导入素材库。
 - Codex / Claude 本机任务使用 `task.lock` 防重复运行；结果先写 `result.pending.md`，完成后才替换为 `result.md`。服务重启后会检查锁内进程，仍存活则等待结果，已消失才恢复为待重跑。
 - Agent 输出永远是候选，引用、数字、时间和来源必须人工核对后才能进入发布链路。
+- `plugin/content-flow-workbench/` 暴露九个固定方法，供 gkbot、Muse、Codex、Claude 等本地 Agent 读取平台能力、登记信源、生成逐字稿与分析、创建任务、导出知识包和运行晨间流水线。客户端只允许 loopback、manifest 路由白名单和无重定向请求。
 
-使用方式和隐私边界见 [docs/agent-bridge.md](docs/agent-bridge.md)。
+使用方式和隐私边界见 [docs/agent-bridge.md](docs/agent-bridge.md)，Agent 插件协议见 [docs/plugin.md](docs/plugin.md)。
 
 ## 数据与隐私
 
@@ -126,19 +132,16 @@ npm run remove-task
 | 端到端链路与状态机 | [docs/end-to-end-chain.md](docs/end-to-end-chain.md) |
 | Agent 桥接 | [docs/agent-bridge.md](docs/agent-bridge.md) |
 | UI 设计原则与验收门槛 | [docs/workbench-ui-principles.md](docs/workbench-ui-principles.md) |
-| 决策记录 | [decisions.md](decisions.md) |
+| 决策记录 | [docs/DECISIONS.md](docs/DECISIONS.md) |
 
 ## 验证
 
 ```powershell
-node --check scripts/server.mjs
-node --check scripts/chain-regression.mjs
-node --check scripts/collect-all.mjs
-node --check app/app.js
-node -e "JSON.parse(require('fs').readFileSync('data/import-template.json','utf8')); console.log('JSON OK')"
-npm run test:chain
+npm run verify:workbench
 npm run verify:source
 npm start
 ```
 
-启动后确认首页和 `/api/state` 都返回 200。`npm run test:chain` 会创建临时数据文件、投递箱、Agent 目录、Drive mock 目录、备份目录和 mock RSS 服务，不读取或修改真实主数据。`npm run verify:source` 用于最终发布或交接，要求当前是干净的 `main`，所有 Agent 分支和 worktree 已合并，并验证本地、`origin/main` 与 GitHub 实时主线为同一个 SHA。
+`npm run verify:workbench` 顺序运行语法检查、41 项主链路、后端流水线、17 项信源登记、7 项批量采集、5 项插件协议、TypeScript、`git diff --check` 和 UI 构建；成功时只输出每步一行，失败时才展开对应日志。需要定位单项问题时，可分别运行 `npm run test:chain`、`npm run test:backend`、`npm run test:sources`、`npm run test:batch`、`npm run test:plugin`、`npm run check:types` 或 `npm run build:ui`。
+
+启动后确认首页和 `/api/state` 都返回 200。以上回归使用临时数据、动态端口或 mock Drive，不读取或修改真实主数据。真实 Google Drive 同步目录和 gkbot / Muse 回流仍需用户在本机完成一次真实接入验收。`npm run verify:source` 用于最终发布或交接，要求当前是干净的 `main`，所有 Agent 分支和 worktree 已合并，并验证本地、`origin/main` 与 GitHub 实时主线为同一个 SHA。
