@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { api, isLocalRehearsal } from "../lib/api";
 import { PUBLICATION_STATUS_LABEL, STAGE_LABEL } from "../lib/constants";
 import { countChars, fmtDate, fmtDateTime, platformLabel, toneForEvidence } from "../lib/format";

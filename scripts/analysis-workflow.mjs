@@ -260,10 +260,6 @@ function quoteFromSegments(segments, why, limit = 260) {
   };
 }
 
-function firstMatchingSegment(segments, pattern) {
-  return segments.find((segment) => pattern.test(segment.text)) || null;
-}
-
 function detectHookPattern(text) {
   if (/[?？]/.test(text)) return "提问式钩子";
   if (/不是.+而是|反而|其实|但是|却/.test(text)) return "反差式钩子";

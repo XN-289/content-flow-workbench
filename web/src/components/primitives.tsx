@@ -420,16 +420,6 @@ export function EmptyState({ text, action }: { text: string; action?: React.Reac
   );
 }
 
-export function ErrorState({ text, onRetry }: { text: string; onRetry: () => void }) {
-  return (
-    <div className="empty" role="alert">
-      <strong style={{ color: "var(--danger)" }}>出错了</strong>
-      <span>{text}</span>
-      <Button onClick={onRetry}>重试</Button>
-    </div>
-  );
-}
-
 export function Skeleton({ rows = 3 }: { rows?: number }) {
   return (
     <div className="stack" aria-hidden="true">
@@ -438,8 +428,4 @@ export function Skeleton({ rows = 3 }: { rows?: number }) {
       ))}
     </div>
   );
-}
-
-export function Keycap({ children }: { children: React.ReactNode }) {
-  return <span className="keycap">{children}</span>;
 }

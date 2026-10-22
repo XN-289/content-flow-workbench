@@ -69,7 +69,8 @@ web/
    │  ├─ api.ts
    │  ├─ constants.ts
    │  ├─ format.ts
-   │  └─ types.ts
+   │  ├─ types.ts
+   │  └─ xhs-capture.ts
    ├─ state/
    │  └─ store.tsx
    └─ styles/
@@ -86,7 +87,7 @@ scripts/
 
 app/
 ├─ dist/              # 当前稳定构建产物，生成文件，不是源码
-├─ app.js / styles.css / index.html  # 历史 UI，仅作留存
+├─ capture-bridge.html # 小红书受限页面的本地桥接页
 └─ ui-*/              # 历史时间戳产物，不参与当前成品
 ```
 
@@ -94,7 +95,7 @@ app/
 
 - 所有前端源码只改 `web/src`。
 - `app/dist` 是构建结果，不手工编辑；`npm start` 只读取它，不会隐式重建。
-- `app/app.js`、`app/styles.css`、`app/index.html` 与 `app/ui-*` 不再是成品入口，不得继续追加功能或覆盖样式。
+- 旧 `app/app.js`、`app/styles.css`、`app/index.html` 已删除；`app/capture-bridge.html` 只承担受限页面的本地桥接，不承载业务 UI。
 - 成品不使用 `scripts/ui.mjs`、`scripts/ui-server.mjs`、独立 UI 端口或 API 代理；这些历史链路只用于解释旧版本。
 - feature 之间不直接依赖内部实现；跨域复用进入 `components/` 或 `lib/`。
 
@@ -208,7 +209,7 @@ Vite 开发页默认是 5181，并只在开发期把 `/api` 代理到 5177。成
 - `scripts/server.mjs` 的数据与 API 契约保持稳定，并负责静态路径边界。
 - 静态托管不得把 `/assets/*` 的 404 错误地回退成 `index.html`；SPA 仅对页面路由回退。
 - 前端源码变更后必须重新构建、重启并确认页面引用最新 bundle。
-- 当前 TypeScript 配置尚未启用 `strict`；新代码不得用 `any` 掩盖接口不确定性，后续可单独收紧。
+- TypeScript 已启用 `noUnusedLocals` 与 `noUnusedParameters`，未被组件或模块引用的本地代码会直接阻止类型检查通过。
 
 ## 8. 验证
 

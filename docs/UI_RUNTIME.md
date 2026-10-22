@@ -23,7 +23,7 @@ npm start
 
 默认端口是 `5177`。需要临时改端口时使用 `$env:PORT=另一个端口; npm start`。
 
-`npm start` 不会隐式重建前端。前端源码或样式改动后，先运行 `npm run build:ui`，再重启服务。`app/` 根目录下的旧 `index.html`、`app.js`、`styles.css` 以及 `app/ui-*` 时间戳目录只作为历史留存，不再由当前服务托管。
+`npm start` 不会隐式重建前端。前端源码或样式改动后，先运行 `npm run build:ui`，再重启服务。旧 `app/index.html`、`app/app.js`、`app/styles.css` 已删除；`app/capture-bridge.html` 仍保留，只用于小红书受限页面的本地桥接。
 
 ## 开发模式
 

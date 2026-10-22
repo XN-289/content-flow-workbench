@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { fmtClock, fmtDateTime, platformLabel, toneForEvidence, toneForRunStatus } from "../lib/format";
+import { fmtClock, fmtDateTime, toneForEvidence, toneForRunStatus } from "../lib/format";
 import { RUN_STATUS_LABEL } from "../lib/constants";
 import type { AgentName, AgentTaskCreatePayload, AgentTaskKind } from "../lib/types";
 import { useStore } from "../state/store";

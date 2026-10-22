@@ -276,7 +276,7 @@ icons:
 ### 焦点与键盘
 - 焦点环：2px `--action` + 2px offset，任何主题下都必须可见。
 - Tab 顺序 = 视觉顺序；浮层打开时焦点进入浮层，关闭后回到触发元素。
-- 所有图标按钮必须有 `aria-label`；快捷键提示用 `Keycap` 组件（11px，圆角 4px，`--surface-sunken`）。
+- 所有图标按钮必须有 `aria-label`。
 
 ## 7. 图标
 

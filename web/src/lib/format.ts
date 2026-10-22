@@ -29,12 +29,6 @@ export function countChars(text?: string): { nonSpace: number; raw: number } {
   return { nonSpace: raw.replace(/\s+/g, "").length, raw: raw.length };
 }
 
-export function relativeMultiple(signal: any): string {
-  const multiple = Number(signal?.relativeMultiple || 0);
-  if (!Number.isFinite(multiple) || multiple <= 0) return "无对比基准";
-  return `${multiple.toFixed(1)}× 中位互动`;
-}
-
 export function toneForRunStatus(status?: string): Tone {
   switch (status) {
     case "ok":

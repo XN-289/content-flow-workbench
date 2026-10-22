@@ -877,10 +877,6 @@ function signalIdentityKeys(record = {}) {
   return keys;
 }
 
-function signalIdentityKey(record = {}) {
-  return signalIdentityKeys(record)[0] || "";
-}
-
 function hasSignal(state, candidate) {
   const keys = new Set(signalIdentityKeys(candidate));
   return (state.signals || []).some((signal) => signalIdentityKeys(signal).some((key) => keys.has(key)));
@@ -3619,11 +3615,6 @@ function processPidAppearsAlive(pid) {
   }
 }
 
-async function agentTaskProcessIsAlive(taskId) {
-  const lock = await readAgentTaskLock(taskId);
-  return Boolean(lock?.pid && processPidAppearsAlive(lock.pid));
-}
-
 async function recoverDetachedAgentTasks(state) {
   let changed = false;
   for (const task of state.agentTasks || []) {
@@ -3682,15 +3673,6 @@ async function recoverInterruptedAgentTasks() {
   });
 }
 
-async function scanAgentTaskResultsTick() {
-  await enqueueStateMutation(async () => {
-    const state = await readState();
-    const recovered = await recoverDetachedAgentTasks(state);
-    await scanAgentTaskResults(state);
-    if (recovered) await writeState(state);
-  });
-}
-
 let automationTickBusy = false;
 let morningPipelineBusy = false;
 
@@ -3731,13 +3713,6 @@ async function runDropFolderScanQueued(trigger, allowDisabled, options = {}) {
 
 async function runQuickCaptureQueued(text, sourceId) {
   return enqueueStateMutation(() => runQuickCapture(text, sourceId));
-}
-
-async function collectQueued(sourceId, trigger) {
-  return enqueueStateMutation(async () => {
-    const state = await readState();
-    return collectWithLock(state, sourceId, trigger);
-  });
 }
 
 async function startLocalAgentTask(state, taskId) {

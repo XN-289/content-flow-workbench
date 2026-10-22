@@ -1,5 +1,6 @@
 import http from "node:http";
 import crypto from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -1465,144 +1466,31 @@ async function main() {
   equal((await state(base)).topics.length, topicCountBeforeBodyLimit, "topic count after oversized request");
   pass("单端口 SPA 回落、缺失资源拒绝、静态路径越界返回 403，超大请求返回 413 且不写主数据");
 
-  const appJs = await fs.readFile(path.join(repoRoot, "app/app.js"), "utf8");
-  truthy(appJs.includes("function browserCaptureToken"), "browser capture token helper");
+  const xhsCaptureSource = await fs.readFile(path.join(repoRoot, "web/src/lib/xhs-capture.ts"), "utf8");
+  const flowSource = await fs.readFile(path.join(repoRoot, "web/src/features/flow.tsx"), "utf8");
   truthy(
-    appJs.includes("function xhsDetailCollectorSource") && appJs.includes("browser-detail-capture") && appJs.includes("详情证据"),
-    "XHS detail evidence bookmark and renderer"
-  );
-  equal((appJs.match(/data-edit-form=/g) || []).length, 3, "record edit form count");
-  truthy(appJs.includes("form.dataset.editForm"), "record edit submit handler");
-  truthy(
-    appJs.includes("if (directProduction)") && appJs.includes('updateRecord("topics", createdTopic.id, { stage: "outline" })'),
-    "direct production stage advance helper"
-  );
-  truthy(appJs.includes("function renderBackups"), "backup view renderer");
-  truthy(appJs.includes("function renderCommandCenter"), "command center renderer");
-  truthy(appJs.includes("function renderInbox"), "inbox renderer");
-  truthy(
-    appJs.includes("create-evidence-package") && appJs.includes("copy-evidence-path") && appJs.includes("data-evidence-form"),
-    "inbox evidence package controls"
+    xhsCaptureSource.includes("/api/browser-capture")
+      && xhsCaptureSource.includes("/api/browser-detail-capture")
+      && xhsCaptureSource.includes("capture-bridge.html")
+      && xhsCaptureSource.includes("expiresAt"),
+    "React XHS capture keeps profile, detail, bridge and token expiry contracts"
   );
   truthy(
-    appJs.includes('data-action="transcribe-signal"') && appJs.includes("/api/signals/transcript") && appJs.includes("逐字稿时间轴"),
-    "inbox local ASR transcript controls and timeline renderer"
+    flowSource.includes("canCaptureXhsProfile")
+      && flowSource.includes("canCaptureXhsDetail")
+      && flowSource.includes("xhsDetailBookmarkletHref")
+      && flowSource.includes("BookmarkletActions"),
+    "React flow exposes gated XHS profile and detail capture actions"
   );
   truthy(
-    appJs.includes("标记“证据已核对”前，请填写人工核对说明。"),
-    "verified evidence requires a visible human note"
+    !existsSync(path.join(repoRoot, "app/app.js"))
+      && !existsSync(path.join(repoRoot, "app/index.html"))
+      && !existsSync(path.join(repoRoot, "app/styles.css"))
+      && existsSync(path.join(repoRoot, "app/capture-bridge.html")),
+    "legacy UI is removed while the capture bridge remains"
   );
-  truthy(appJs.includes("commandCoverageText"), "command center coverage helper");
-  truthy(appJs.includes("const navItems"), "primary tab navigation definition");
-  truthy(appJs.includes('["overview", "总览"]'), "overview primary tab");
-  truthy(appJs.includes('["flow", "信息流"]'), "information flow primary tab");
-  truthy(appJs.includes('["workflow", "工作流"]'), "workflow primary tab");
-  truthy(appJs.includes('["system", "系统"]'), "system primary tab");
-  truthy(!appJs.includes('["today", "今日"]'), "no former today child tab");
-  truthy(!appJs.includes('["sources", "账号"]'), "no former sources child tab");
-  truthy(appJs.includes("function renderInformationFlow"), "information flow combined renderer");
-  truthy(appJs.includes("function renderWorkflowWorkspace"), "workflow combined renderer");
-  truthy(appJs.includes("function renderSystemWorkspace"), "system combined renderer");
-  truthy(appJs.includes("function renderFlowRhythm"), "information flow rhythm renderer");
-  truthy(appJs.includes("function dailyPriorityQueue"), "daily priority queue renderer");
-  truthy(appJs.includes("function renderWorkflowPipeline"), "workflow pipeline renderer");
-  truthy(appJs.includes('const workflowFocusStorageKey = "workbench-workflow-focus-topic"'), "workflow focus persistence key");
-  truthy(appJs.includes("function renderWorkflowFocus"), "workflow focus renderer");
-  truthy(appJs.includes("data-workflow-focus-selector"), "workflow focus selector");
-  truthy((appJs.match(/\bsetWorkflowFocusTopic\(/g) || []).length >= 6, "workflow focus assignments across data entry paths");
-  truthy(appJs.includes("function workflowGuidance"), "workflow next-action guidance");
-  truthy(
-    appJs.includes("function preferredScrollBehavior")
-      && appJs.includes('window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"'),
-    "workflow scrolling respects reduced motion"
-  );
-  truthy(
-    appJs.includes("let details = panel.closest(\"details\")")
-      && appJs.includes("details = details.parentElement?.closest(\"details\") || null"),
-    "workflow anchors recursively open nested disclosure parents"
-  );
-  truthy(appJs.includes("function workflowPipelineStageKey"), "workflow pipeline stage mapping helper");
-  const pipelineRenderer = appJs.slice(
-    appJs.indexOf("function renderWorkflowPipeline"),
-    appJs.indexOf("function renderToday")
-  );
-  truthy(
-    pipelineRenderer.includes("workflowPipelineStageKey(focusedTopic.stage)")
-      && !pipelineRenderer.includes("workflowStageGroup(focusedTopic.stage)"),
-    "workflow funnel uses stage-specific highlighting"
-  );
-  const scriptRenderer = appJs.slice(
-    appJs.indexOf("function renderProduction"),
-    appJs.indexOf("function renderPublish")
-  );
-  const publicationRenderer = appJs.slice(
-    appJs.indexOf("function renderPublish"),
-    appJs.indexOf("function renderReview")
-  );
-  const workflowReviewRenderer = appJs.slice(
-    appJs.indexOf("function renderReview"),
-    appJs.indexOf("function recentFrictionLog")
-  );
-  truthy(
-    scriptRenderer.includes('id="script-form"')
-      && scriptRenderer.includes('<input type="hidden" name="topicId"')
-      && !scriptRenderer.includes('<select name="topicId"'),
-    "script form binds hidden workflow focus without a duplicate selector"
-  );
-  truthy(
-    publicationRenderer.includes('id="publication-form"')
-      && publicationRenderer.includes('<input type="hidden" name="topicId"')
-      && !publicationRenderer.includes('<select name="topicId"'),
-    "publication form binds hidden workflow focus without a duplicate selector"
-  );
-  truthy(
-    workflowReviewRenderer.includes('id="review-form"')
-      && workflowReviewRenderer.includes('<input type="hidden" name="topicId"')
-      && !workflowReviewRenderer.includes('<select name="topicId"'),
-    "review form binds hidden workflow focus without a duplicate selector"
-  );
-  truthy(appJs.includes("function renderPublishBoard"), "publish board renderer");
-  truthy(
-    appJs.includes("function renderMorningPipelineStages") && appJs.includes("function renderCapabilityMatrix"),
-    "morning pipeline and capability matrix renderers"
-  );
-  truthy(
-    appJs.includes("function scriptChangeSummary")
-      && appJs.includes('class="details script-versions" open')
-      && appJs.includes('class="script-text"'),
-    "direct script version review"
-  );
-  truthy(appJs.includes("function comparePublications"), "publish queue sorting helper");
-  truthy(appJs.includes("function recentFrictionLog") && appJs.includes("function renderFrictionSummary"), "three-day friction summary helper");
-  truthy(appJs.includes("function viewFromLocationHash"), "primary tab deep-link helper");
-  truthy(appJs.includes("async function activateView"), "primary tab activation helper");
-  truthy(appJs.includes('window.addEventListener("hashchange"'), "primary tab hash-change handler");
   truthy(indexHtml.includes("cfw.theme") && indexHtml.includes('data-theme="light"'), "single-port React theme bootstrap");
   truthy(indexHtml.includes("/assets/index-") && indexHtml.includes('id="root"'), "single-port React asset entry");
-  const todayRenderer = appJs.slice(
-    appJs.indexOf("function renderToday"),
-    appJs.indexOf("function renderSources")
-  );
-  truthy(todayRenderer.includes('id="quick-capture"'), "today quick capture placement");
-  truthy(todayRenderer.includes("sprint-progress"), "today sprint progress placement");
-  truthy(todayRenderer.includes("priority-list"), "today priority queue placement");
-  truthy(todayRenderer.includes('class="priority-action"') && todayRenderer.includes('data-action="nav"'), "today priority actions navigate directly");
-  truthy(!todayRenderer.includes('id="friction-form"'), "today friction form separation");
-  const reviewRenderer = appJs.slice(
-    appJs.indexOf("function renderReview"),
-    appJs.indexOf("function renderRuns")
-  );
-  truthy(reviewRenderer.includes('id="friction-form"'), "review friction form placement");
-  truthy(reviewRenderer.includes("${renderFrictionSummary()}"), "three-day friction summary placement");
-  truthy(
-    reviewRenderer.includes("稿件回看")
-      && reviewRenderer.includes('topic.stage === "reviewed"')
-      && reviewRenderer.includes("renderScriptVersionList(topic.id)")
-      && reviewRenderer.includes("reviewed-script-topic")
-      && reviewRenderer.includes('id="workflow-reviewed-scripts"')
-      && reviewRenderer.includes("展开正文与历史版本"),
-    "reviewed scripts remain visible in review"
-  );
   const serverJs = await fs.readFile(path.join(repoRoot, "scripts/server.mjs"), "utf8");
   truthy(serverJs.includes('from "./backup-store.mjs"'), "backup store module import");
   truthy(serverJs.includes("process.env.DROP_SCAN_MS || 30000"), "local file scan default interval");
@@ -1611,7 +1499,7 @@ async function main() {
     "signal transcript API and per-signal concurrency lock"
   );
   equal((serverJs.match(/async function createBackup/g) || []).length, 0, "server-local backup writer count");
-  pass("工作台页面、信息架构、采集书签 helper、记录编辑、备份视图与备份模块边界冒烟通过");
+  pass("React 单入口、小红书采集契约、旧 UI 清理和备份模块边界冒烟通过");
   pass("生产台直接展示稿件正文、字数和相对上一版变更摘要");
   pass("已复盘选题在复盘区保留稿件正文和历史版本");
   pass("本地投递箱和 Agent 结果扫描默认间隔收紧到 30 秒");

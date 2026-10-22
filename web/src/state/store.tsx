@@ -179,5 +179,3 @@ export const NAV_ITEMS: { key: ViewKey; label: string }[] = [
   { key: "workflow", label: "工作流" },
   { key: "system", label: "系统" }
 ];
-
-export const ALL_VIEWS = VIEWS;

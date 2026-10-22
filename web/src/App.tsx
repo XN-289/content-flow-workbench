@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { api } from "./lib/api";
 import { StoreProvider, useStore } from "./state/store";
 import { Shell, Toasts, TopBar } from "./components/AppShell";

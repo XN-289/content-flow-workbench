@@ -1,8 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { DISPOSITION_LABEL, EVIDENCE_STATE_LABEL } from "../lib/constants";
 import { capabilityLabel, capabilityTone, fmtDate, fmtDateTime, platformLabel, toneForEvidence } from "../lib/format";
 import type { Tone, TranscriptAnalysisQuote } from "../lib/types";
+import {
+  canCaptureXhsDetail,
+  canCaptureXhsProfile,
+  xhsBookmarkletHref,
+  xhsDetailBookmarkletHref
+} from "../lib/xhs-capture";
 import { useStore } from "../state/store";
 import { Shell } from "../components/AppShell";
 import { Button, Card, Chip, EmptyState, Field, QueueRow, Segmented, Sheet, TimelineItem } from "../components/primitives";
@@ -155,6 +161,33 @@ async function copyText(text: string) {
   if (!copied) throw new Error("浏览器未允许复制");
 }
 
+function BookmarkletActions({
+  href,
+  onCopy,
+  label
+}: {
+  href: string;
+  onCopy: () => void;
+  label: string;
+}) {
+  return (
+    <>
+      <a
+        className="btn small"
+        href={href}
+        draggable="true"
+        title="拖到浏览器书签栏；点击不会在当前工作台执行"
+        onClick={(event) => event.preventDefault()}
+      >
+        {label}
+      </a>
+      <Button small variant="ghost" onClick={onCopy}>
+        复制脚本
+      </Button>
+    </>
+  );
+}
+
 export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
   const { state, mutate, busy, setView, setActiveTopic, notify, refresh } = useStore();
   const [filter, setFilter] = useState("inbox");
@@ -246,12 +279,14 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
 
   const activeRecord = records.find((record) => record.sourceId === sourceId) || records[0];
   const activeSource = state.sources.find((source: any) => source.id === activeRecord?.sourceId);
+  const canCaptureProfile = canCaptureXhsProfile(activeSource, runtime);
   const selectedCapabilityPlatform =
     capabilityPlatforms.find((platform: any) => platform.id === capabilityPlatformId) || capabilityPlatforms[0] || null;
   const transcriptSignal = state.signals.find((signal: any) => signal.id === transcriptSignalId) || null;
   const transcriptSource = transcriptSignal
     ? state.sources.find((source: any) => source.id === transcriptSignal.sourceId)
     : null;
+  const canCaptureTranscriptDetail = canCaptureXhsDetail(transcriptSignal, transcriptSource, runtime);
   const transcriptRun = transcriptSignal
     ? state.transcriptRuns.find((run: any) => run.signalId === transcriptSignal.id && run.status === "captured") ||
       transcriptBySignal[transcriptSignal.id] ||
@@ -330,6 +365,15 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
       notify("逐字稿全文已复制", "success");
     } catch (error: any) {
       notify(error.message || "复制失败", "danger");
+    }
+  };
+
+  const copyCaptureScript = async (script: string, successMessage: string) => {
+    try {
+      await copyText(script);
+      notify(successMessage, "success");
+    } catch (error: any) {
+      notify(error.message || "采集脚本复制失败", "danger");
     }
   };
 
@@ -629,6 +673,20 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                       <span className="subtle" style={{ fontSize: 12 }}>未登记主页链接</span>
                     </div>
                   )}
+                  {canCaptureProfile ? (
+                    <div className="inline">
+                      <BookmarkletActions
+                        href={xhsBookmarkletHref(activeSource, runtime)}
+                        onCopy={() =>
+                          void copyCaptureScript(
+                            xhsBookmarkletHref(activeSource, runtime),
+                            "主页采集脚本已复制"
+                          )
+                        }
+                        label="主页采集书签"
+                      />
+                    </div>
+                  ) : null}
                   <div className="inline">
                     <Chip tone={activeRecord.coverage?.status === "blocked" ? "danger" : "success"}>
                       覆盖率 {activeRecord.coverage?.percent ?? 0}%
@@ -793,6 +851,7 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                   // 「下一条该处理的」= 当前筛选下第一条仍待分诊的信号
                   const isNextSignal = signalIndex === 0 && signal.disposition === "inbox";
                   const source = state.sources.find((item: any) => item.id === signal.sourceId);
+                  const canCaptureDetail = canCaptureXhsDetail(signal, source, runtime);
                   const isFocus = focusSignalId === signal.id;
                   return (
                     <div
@@ -854,6 +913,23 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                                 核对证据
                               </Button>
                             )}
+                            {canCaptureDetail ? (
+                              <details className="capture-inline">
+                                <summary>补详情</summary>
+                                <div className="capture-inline-actions">
+                                  <BookmarkletActions
+                                    href={xhsDetailBookmarkletHref(signal, runtime)}
+                                    onCopy={() =>
+                                      void copyCaptureScript(
+                                        xhsDetailBookmarkletHref(signal, runtime),
+                                        "详情采集脚本已复制"
+                                      )
+                                    }
+                                    label="补详情书签"
+                                  />
+                                </div>
+                              </details>
+                            ) : null}
                             {hasCapturedTranscript ? (
                               <Button small onClick={() => openTranscript(signal)}>
                                 查看逐字稿
@@ -1094,6 +1170,18 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                 ]}
               />
               <div className="transcript-reader-actions">
+                {canCaptureTranscriptDetail ? (
+                  <BookmarkletActions
+                    href={xhsDetailBookmarkletHref(transcriptSignal, runtime)}
+                    onCopy={() =>
+                      void copyCaptureScript(
+                        xhsDetailBookmarkletHref(transcriptSignal, runtime),
+                        "详情采集脚本已复制"
+                      )
+                    }
+                    label="补详情书签"
+                  />
+                ) : null}
                 <Button small disabled={!transcriptText} onClick={copyTranscript}>
                   复制全文
                 </Button>

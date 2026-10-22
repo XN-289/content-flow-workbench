@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import { useMemo } from "react";
 import { api } from "../lib/api";
 import { STAGE_LABEL } from "../lib/constants";
 import {
