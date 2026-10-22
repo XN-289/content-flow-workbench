@@ -796,7 +796,7 @@ export function FlowView({ focusSignalId }: { focusSignalId?: string | null }) {
                                 {capabilityDimensions.map((dimension: any) => {
                                   const capability = platform.capabilities?.[dimension.id];
                                   return (
-                                    <td key={dimension.id}>
+                                    <td key={dimension.id} data-label={dimension.label}>
                                       <span title={capability?.method || "方法未标注"}>
                                         <Chip tone={capabilityTone(capability?.status)}>{capabilityLabel(capability?.status)}</Chip>
                                       </span>

@@ -608,6 +608,11 @@
     .switch {
       min-height: var(--control-h-touch);
     }
+    .card-disclosure > summary,
+    .workflow-checks > summary,
+    .source-link {
+      min-height: var(--control-h-touch);
+    }
     .overview-focus-copy strong {
       font-size: 20px;
     }
@@ -1198,6 +1203,52 @@
     color: var(--ink);
     font-weight: 500;
   }
+  @media (max-width: 720px) {
+    .table-scroll .responsive-table {
+      min-width: 0;
+    }
+    .responsive-table,
+    .responsive-table tbody,
+    .responsive-table tr,
+    .responsive-table td {
+      display: block;
+      width: 100%;
+    }
+    .responsive-table thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }
+    .responsive-table tr {
+      padding: var(--space-3) 0;
+      border-top: 1px solid var(--hairline);
+    }
+    .responsive-table tbody tr:first-child {
+      padding-top: var(--space-2);
+      border-top: 0;
+    }
+    .responsive-table td {
+      display: grid;
+      grid-template-columns: 56px minmax(0, 1fr);
+      gap: var(--space-3);
+      padding: 6px 0;
+      border: 0;
+      overflow-wrap: anywhere;
+    }
+    .responsive-table td::before {
+      content: attr(data-label);
+      color: var(--ink-subtle);
+      font-size: var(--text-2xs);
+      font-weight: 500;
+      line-height: 20px;
+    }
+    .responsive-table td .inline {
+      align-items: flex-start;
+    }
+  }
 
   /* ---------- Knowledge export history ---------- */
   .knowledge-export-list {
@@ -1358,6 +1409,68 @@
     color: var(--ink-subtle);
     font-size: var(--text-2xs);
     line-height: 16px;
+  }
+  @media (max-width: 900px) {
+    .platform-matrix-platform {
+      min-height: var(--control-h-touch);
+    }
+  }
+  @media (max-width: 720px) {
+    .platform-matrix-wrap {
+      overflow: visible;
+      border: 0;
+    }
+    .platform-matrix,
+    .platform-matrix tbody,
+    .platform-matrix tr,
+    .platform-matrix th,
+    .platform-matrix td {
+      display: block;
+      width: 100%;
+    }
+    .platform-matrix {
+      min-width: 0;
+    }
+    .platform-matrix thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }
+    .platform-matrix tbody {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+    .platform-matrix tbody tr {
+      padding: var(--space-3);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-control);
+      background: var(--surface);
+    }
+    .platform-matrix tbody th {
+      padding: 0 0 var(--space-2);
+      border: 0;
+      text-align: left;
+    }
+    .platform-matrix tbody td {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      padding: 7px 0;
+      border: 0;
+      border-top: 1px solid var(--hairline);
+      text-align: left;
+    }
+    .platform-matrix tbody td::before {
+      content: attr(data-label);
+      color: var(--ink-subtle);
+      font-size: var(--text-2xs);
+      line-height: 18px;
+    }
   }
   .capability-detail-list {
     display: flex;

@@ -224,22 +224,22 @@ export function SystemView() {
                     </Button>
                   </div>
                   <div className="table-scroll" role="region" aria-label="备份列表" tabIndex={0}>
-                    <table className="table">
+                    <table className="table responsive-table">
                       <thead>
                         <tr>
                           <th>备份</th>
                           <th>时间</th>
-                          <th />
+                          <th>操作</th>
                         </tr>
                       </thead>
                       <tbody>
                         {backups.slice(0, 8).map((item: any) => (
                           <tr key={item.filename || item.name}>
-                            <td>
+                            <td data-label="备份">
                               <span className="mono">{item.filename || item.name}</span>
                             </td>
-                            <td>{fmtDateTime(item.createdAt)}</td>
-                            <td>
+                            <td data-label="时间">{fmtDateTime(item.createdAt)}</td>
+                            <td data-label="操作">
                               <Button small onClick={() => restore(item.filename || item.name)}>
                                 恢复
                               </Button>
@@ -270,7 +270,7 @@ export function SystemView() {
             >
               {state.agentTasks.length ? (
                 <div className="table-scroll" role="region" aria-label="Agent 任务列表" tabIndex={0}>
-                  <table className="table">
+                  <table className="table responsive-table">
                     <thead>
                       <tr>
                         <th>任务</th>
@@ -281,7 +281,7 @@ export function SystemView() {
                     <tbody>
                       {state.agentTasks.map((task: any) => (
                         <tr key={task.id}>
-                          <td>
+                          <td data-label="任务">
                             <strong>{task.title || task.id}</strong>
                             <div className="subtle" style={{ fontSize: 11 }}>
                               {labelForAgent(task.agent)} · {labelForTaskKind(task.kind)}
@@ -291,10 +291,10 @@ export function SystemView() {
                               {task.outboxPath || "无输出路径"}
                             </div>
                           </td>
-                          <td>
+                          <td data-label="状态">
                             <Chip tone={toneForRunStatus(task.status)}>{RUN_STATUS_LABEL[task.status] || task.status || "待处理"}</Chip>
                           </td>
-                          <td>
+                          <td data-label="操作">
                             <div className="inline">
                               {task.status === "outbox" ? (
                                 <Button small disabled={busy === `agent-run-${task.id}`} onClick={() => mutate(`agent-run-${task.id}`, () => api.agentRun(task.id), "已触发本机 Agent")}>
@@ -323,7 +323,7 @@ export function SystemView() {
 
             <Card title="采集运行记录" hint={`${runs.length} 次`}>
               <div className="table-scroll" role="region" aria-label="采集运行记录" tabIndex={0}>
-                <table className="table">
+                <table className="table responsive-table">
                   <thead>
                     <tr>
                       <th>账号</th>
@@ -337,9 +337,9 @@ export function SystemView() {
                       const source = state.sources.find((item: any) => item.id === run.sourceId);
                       return (
                         <tr key={run.id}>
-                          <td>{source?.name || run.sourceId}</td>
-                          <td>{run.trigger || "—"}</td>
-                          <td>
+                          <td data-label="账号">{source?.name || run.sourceId}</td>
+                          <td data-label="触发">{run.trigger || "—"}</td>
+                          <td data-label="结果">
                             <div className="inline">
                               <Chip tone={toneForRunStatus(run.status)}>{RUN_STATUS_LABEL[run.status] || run.status}</Chip>
                               <span className="subtle" style={{ fontSize: 11 }}>
@@ -352,7 +352,7 @@ export function SystemView() {
                               </div>
                             ) : null}
                           </td>
-                          <td>{fmtClock(run.finishedAt)}</td>
+                          <td data-label="时间">{fmtClock(run.finishedAt)}</td>
                         </tr>
                       );
                     })}
